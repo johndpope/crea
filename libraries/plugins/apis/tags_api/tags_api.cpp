@@ -18,19 +18,19 @@ class tags_api_impl
       tags_api_impl() : _db( appbase::app().get_plugin< crea::plugins::chain::chain_plugin >().db() ) {}
 
       DECLARE_API_IMPL(
-         (get_trending_tags)
+         (get_popular_tags)
          (get_tags_used_by_author)
          (get_discussion)
          (get_content_replies)
          (get_post_discussions_by_payout)
          (get_comment_discussions_by_payout)
-         (get_discussions_by_trending)
-         (get_discussions_by_created)
+         (get_discussions_by_popular)
+         (get_discussions_by_now)
          (get_discussions_by_active)
          (get_discussions_by_cashout)
          (get_discussions_by_votes)
          (get_discussions_by_children)
-         (get_discussions_by_hot)
+         (get_discussions_by_skyrockets)
          (get_discussions_by_feed)
          (get_discussions_by_blog)
          (get_discussions_by_comments)
@@ -66,15 +66,15 @@ class tags_api_impl
       std::shared_ptr< crea::plugins::follow::follow_api > _follow_api;
 };
 
-DEFINE_API_IMPL( tags_api_impl, get_trending_tags )
+DEFINE_API_IMPL( tags_api_impl, get_popular_tags )
 {
    FC_ASSERT( args.limit <= 1000, "Cannot retrieve more than 1000 tags at a time." );
-   get_trending_tags_return result;
+   get_popular_tags_return result;
    result.tags.reserve( args.limit );
 
    const auto& nidx = _db.get_index< tags::tag_stats_index, tags::by_tag >();
 
-   const auto& ridx = _db.get_index< tags::tag_stats_index, tags::by_trending >();
+   const auto& ridx = _db.get_index< tags::tag_stats_index, tags::by_popular >();
    auto itr = ridx.begin();
    if( args.start_tag != "" && nidx.size() )
    {
@@ -168,19 +168,19 @@ DEFINE_API_IMPL( tags_api_impl, get_comment_discussions_by_payout )
    return get_discussions( args, tag, parent, tidx, tidx_itr, args.truncate_body, []( const database_api::api_comment_object& c ){ return c.net_rshares <= 0; }, exit_default, tag_exit_default, true );
 }
 
-DEFINE_API_IMPL( tags_api_impl, get_discussions_by_trending )
+DEFINE_API_IMPL( tags_api_impl, get_discussions_by_popular )
 {
    args.validate();
    auto tag = fc::to_lower( args.tag );
    auto parent = get_parent( args );
 
-   const auto& tidx = _db.get_index< tags::tag_index, tags::by_parent_trending >();
+   const auto& tidx = _db.get_index< tags::tag_index, tags::by_parent_popular >();
    auto tidx_itr = tidx.lower_bound( boost::make_tuple( tag, parent, std::numeric_limits< double >::max() )  );
 
    return get_discussions( args, tag, parent, tidx, tidx_itr, args.truncate_body, []( const database_api::api_comment_object& c ) { return c.net_rshares <= 0; } );
 }
 
-DEFINE_API_IMPL( tags_api_impl, get_discussions_by_created )
+DEFINE_API_IMPL( tags_api_impl, get_discussions_by_now )
 {
    args.validate();
    auto tag = fc::to_lower( args.tag );
@@ -242,13 +242,13 @@ DEFINE_API_IMPL( tags_api_impl, get_discussions_by_children )
    return get_discussions( args, tag, parent, tidx, tidx_itr, args.truncate_body );
 }
 
-DEFINE_API_IMPL( tags_api_impl, get_discussions_by_hot )
+DEFINE_API_IMPL( tags_api_impl, get_discussions_by_skyrockets )
 {
    args.validate();
    auto tag = fc::to_lower( args.tag );
    auto parent = get_parent( args );
 
-   const auto& tidx = _db.get_index< tags::tag_index, tags::by_parent_hot >();
+   const auto& tidx = _db.get_index< tags::tag_index, tags::by_parent_skyrockets >();
    auto tidx_itr = tidx.lower_bound( boost::make_tuple( tag, parent, std::numeric_limits< double >::max() )  );
 
    return get_discussions( args, tag, parent, tidx, tidx_itr, args.truncate_body, []( const database_api::api_comment_object& c ) { return c.net_rshares <= 0; } );
@@ -551,6 +551,7 @@ void tags_api_impl::set_pending_payout( discussion& d )
    else
       pot = props.total_reward_fund_crea;
 
+    //wlog("pot=${v} ${s}", ("v",pot.amount.value)("s",pot.symbol.to_string()));
    if( !hist.current_median_history.is_null() ) pot = pot * hist.current_median_history;
 
    u256 total_r2 = 0;
@@ -559,21 +560,26 @@ void tags_api_impl::set_pending_payout( discussion& d )
    else
       total_r2 = chain::util::to256( props.total_reward_shares2 );
 
+    //wlog("total_r2=${v}", ("v",static_cast<uint64_t>(total_r2)));
    if( total_r2 > 0 )
    {
       uint128_t vshares;
       if( _db.has_hardfork( CREA_HARDFORK_0_17__774 ) )
       {
          const auto& rf = _db.get_reward_fund( _db.get_comment( d.author, d.permlink ) );
+          //wlog("net_rshares=${v}", ("v",d.net_rshares.value));
          vshares = d.net_rshares.value > 0 ? chain::util::evaluate_reward_curve( d.net_rshares.value, rf.author_reward_curve, rf.content_constant ) : 0;
       }
       else
          vshares = d.net_rshares.value > 0 ? chain::util::evaluate_reward_curve( d.net_rshares.value ) : 0;
 
+
       u256 r2 = chain::util::to256( vshares ); //to256(abs_net_rshares);
+       //wlog("r2_vshares=${v}", ("v",static_cast<uint64_t>(r2)));
       r2 *= pot.amount.value;
       r2 /= total_r2;
 
+       //wlog("r2=${v}", ("v",static_cast<uint64_t>(r2)));
       d.pending_payout_value = asset( static_cast<uint64_t>(r2), pot.symbol );
 
       if( _follow_api )
@@ -715,19 +721,19 @@ tags_api::tags_api(): my( new detail::tags_api_impl() )
 tags_api::~tags_api() {}
 
 DEFINE_READ_APIS( tags_api,
-   (get_trending_tags)
+   (get_popular_tags)
    (get_tags_used_by_author)
    (get_discussion)
    (get_content_replies)
    (get_post_discussions_by_payout)
    (get_comment_discussions_by_payout)
-   (get_discussions_by_trending)
-   (get_discussions_by_created)
+   (get_discussions_by_popular)
+   (get_discussions_by_now)
    (get_discussions_by_active)
    (get_discussions_by_cashout)
    (get_discussions_by_votes)
    (get_discussions_by_children)
-   (get_discussions_by_hot)
+   (get_discussions_by_skyrockets)
    (get_discussions_by_feed)
    (get_discussions_by_blog)
    (get_discussions_by_comments)

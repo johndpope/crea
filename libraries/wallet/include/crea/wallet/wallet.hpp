@@ -60,7 +60,7 @@ struct wallet_data
 {
    vector<char>              cipher_keys; /** encrypted keys */
 
-   string                    ws_server = "ws://localhost:8090";
+   string                    ws_server = "ws://localhost:1886";
    string                    ws_user;
    string                    ws_password;
 };
@@ -932,6 +932,7 @@ class wallet_api
        *  @param parent_permlink becomes category if parent_author is ""
        *  @param title the title of the comment
        *  @param body the body of the comment
+       *  @param download the download of the comment
        *  @param json the json metadata of the comment
        *  @param broadcast true if you wish to broadcast the transaction
        */
@@ -942,8 +943,33 @@ class wallet_api
          string parent_permlink,
          string title,
          string body,
+         string download,
          string json,
          bool broadcast );
+
+      /**
+       * Enable content resource for download
+       * @param downloader the name of the account authoring the decryption
+       * @param comment_author the name of the account author of comment
+       * @param comment_permlink the accountwide permlink for the comment
+       * @param broadcast true if you wish to broadcast the transaction
+       */
+      condenser_api::legacy_signed_transaction content_download(
+         string downloader,
+         string comment_author,
+         string comment_permlink,
+         bool broadcast );
+
+      /**
+       * Decrypt content resource
+       * @param downloader the name of the account authoring the decryption
+       * @param comment_author the name of the account author of comment
+       * @param comment_permlink the accountwide permlink for the comment
+       */
+      condenser_api::api_download_granted_object get_download(
+            string downloader,
+            string comment_author,
+            string comment_permlink );
 
       /**
        * Vote on a comment to be paid CREA
@@ -1023,6 +1049,7 @@ class wallet_api
        *  @param limit - the maximum number of items that can be queried (0 to 1000], must be less than from
        */
       map< uint32_t, condenser_api::api_operation_object > get_account_history( string account, uint32_t from, uint32_t limit );
+
 
 
       FC_TODO(Supplement API argument description)
@@ -1116,6 +1143,7 @@ FC_API( crea::wallet::wallet_api,
         (get_account_history)
         (get_state)
         (get_withdraw_routes)
+        (get_download)
 
         /// transaction api
         (create_account)
@@ -1148,6 +1176,7 @@ FC_API( crea::wallet::wallet_api,
         (create_order)
         (cancel_order)
         (post_comment)
+        (content_download)
         (vote)
         (set_transaction_expiration)
         (request_account_recovery)

@@ -5,9 +5,11 @@
 #include <crea/chain/witness_objects.hpp>
 #include <crea/chain/block_summary_object.hpp>
 
+#include <crea/chain/util/asset.hpp>
 #include <crea/chain/util/reward.hpp>
-#include <crea/chain/util/manabar.hpp>
+#include <crea/chain/util/flowbar.hpp>
 
+#include <fc/crypto/aes.hpp>
 #include <fc/macros.hpp>
 
 #ifndef IS_LOW_MEM
@@ -36,6 +38,19 @@ std::string wstring_to_utf8(const std::wstring& str)
 }
 
 #endif
+
+std::string generate_password(const int min, const int max) {
+    int pwd_len = min + (rand() % static_cast<int>(max - min + 1));
+
+    std::string password;
+    password.reserve((unsigned long) pwd_len);
+    for (int x = 0; x < pwd_len; x++) {
+        char c = static_cast<char>( SCHAR_MIN + (rand() % (SCHAR_MAX - SCHAR_MIN + 1) ) );
+        password.push_back(c);
+    }
+
+    return password;
+}
 
 #include <fc/uint128.hpp>
 #include <fc/utf8.hpp>
@@ -289,12 +304,12 @@ void initialize_account_object( account_object& acc, const account_name_type& na
    acc.name = name;
    acc.memo_key = key;
    acc.created = props.time;
-   acc.voting_manabar.last_update_time = props.time.sec_since_epoch();
+   acc.voting_flowbar.last_update_time = props.time.sec_since_epoch();
    acc.mined = mined;
 
    if( hardfork < CREA_HARDFORK_0_20__2539 )
    {
-      acc.voting_manabar.current_mana = CREA_100_PERCENT;
+      acc.voting_flowbar.current_flow = CREA_100_PERCENT;
    }
 
    if( hardfork >= CREA_HARDFORK_0_11 )
@@ -687,6 +702,11 @@ void comment_evaluator::do_apply( const comment_operation& o )
       FC_ASSERT( o.title.size() + o.body.size() + o.json_metadata.size(), "Cannot update comment because nothing appears to be changing." );
 
    const auto& by_permlink_idx = _db.get_index< comment_index >().indices().get< by_permlink >();
+
+   const auto& comment_idx = _db.get_index< comment_index >().indices();
+   const auto& idx_itr = comment_idx.begin();
+   bool first_comment = idx_itr == comment_idx.end();
+
    auto itr = by_permlink_idx.find( boost::make_tuple( o.author, o.permlink ) );
 
    const auto& auth = _db.get_account( o.author ); /// prove it exists
@@ -704,6 +724,7 @@ void comment_evaluator::do_apply( const comment_operation& o )
    }
 
    FC_ASSERT( fc::is_utf8( o.json_metadata ), "JSON Metadata must be UTF-8" );
+   FC_ASSERT( fc::is_utf8( o.download ), "Download data must be UTF-8" );
 
    auto now = _db.head_block_time();
 
@@ -759,9 +780,10 @@ void comment_evaluator::do_apply( const comment_operation& o )
          {
             a.last_root_post = now;
             a.post_bandwidth = uint32_t( post_bandwidth );
+            a.post_count++;
          }
          a.last_post = now;
-         a.post_count++;
+
       });
 
       const auto& new_comment = _db.create< comment_object >( [&]( comment_object& com )
@@ -803,7 +825,12 @@ void comment_evaluator::do_apply( const comment_operation& o )
 
          if( _db.has_hardfork( CREA_HARDFORK_0_17__769 ) )
          {
-            com.cashout_time = com.created + CREA_CASHOUT_WINDOW_SECONDS;
+             if (first_comment) {
+                 com.cashout_time = com.created + CREA_FIRST_WINDOW_SECONDS;
+             } else {
+                 com.cashout_time = com.created + CREA_CASHOUT_WINDOW_SECONDS;
+             }
+
          }
       });
 
@@ -822,6 +849,60 @@ void comment_evaluator::do_apply( const comment_operation& o )
          from_string( con.json_metadata, o.json_metadata );
       });
    #endif
+
+      const comment_download_object& cdo = _db.create< comment_download_object >( [&]( comment_download_object& d)
+      {
+         try
+         {
+            d.comment = id;
+            if (o.download.empty()) {
+               d.size = 0;
+               from_string(d.type, "");
+               from_string(d.name, "");
+               from_string(d.password, "");
+               from_string(d.resource, "");
+               d.price = crea::chain::util::asset_from_string("0.000 CREA");
+            } else {
+               comment_download_data download_data;
+               download_data = fc::json::from_string( o.download ).as< comment_download_data >();
+
+               FC_ASSERT(download_data.resource.size(), "Invalid download resource");
+
+               d.size = download_data.size;
+               from_string(d.type, download_data.type);
+               from_string(d.name, download_data.name);
+               d.price = crea::chain::util::asset_from_string(download_data.price);
+
+               //Create a password for encrypt this download
+               //Determine password length
+               const int min = 6;
+               const int max = 12;
+               string password = generate_password(min, max);
+
+               //Encrypt the content
+               fc::sha512::encoder enc;
+               fc::raw::pack(enc, password);
+               fc::sha512 pwd = enc.result();
+
+               std::vector<char> encrypted = fc::aes_encrypt(pwd, fc::raw::pack_to_vector(download_data.resource));
+
+               from_string(d.password, password);
+               string enconded = fc::base64_encode(encrypted.data(), (unsigned int) encrypted.size());
+               from_string(d.resource, enconded);
+            }
+         }
+         FC_CAPTURE_AND_RETHROW( (o) )
+      });
+
+      //Free download for author
+      _db.create< download_granted_object >( [&] (download_granted_object& dgo){
+          dgo.download = cdo.id;
+          dgo.price = cdo.price;
+          dgo.comment_author = o.author;
+          dgo.downloader = o.author;
+          from_string(dgo.comment_permlink, o.permlink);
+          dgo.payment_date = _db.head_block_time();
+      });
 
 
 /// this loop can be skiped for validate-only nodes as it is merely gathering stats for indicies
@@ -895,13 +976,119 @@ void comment_evaluator::do_apply( const comment_operation& o )
             }
          }
       });
+
+       if (!o.download.empty()) {
+           _db.modify( _db.get< comment_download_object, by_comment >( comment.id ), [&]( comment_download_object& d)
+           {
+               try
+               {
+                   comment_download_data download_data;
+                   download_data = fc::json::from_string( o.download ).as< comment_download_data >();
+
+                   //Disable download
+                   if (download_data.resource.empty()) {
+                       d.size = 0;
+                       from_string(d.type, "");
+                       from_string(d.name, "");
+                       d.price = crea::chain::util::asset_from_string("0.000 CREA");
+                       from_string(d.password, "");
+                       from_string(d.resource, "");
+                   } else {
+                       d.size = download_data.size;
+                       from_string(d.type, download_data.type);
+                       from_string(d.name, download_data.name);
+                       d.price = crea::chain::util::asset_from_string(download_data.price);
+
+                       //Create a password for encrypt this download
+                       //Determine password length
+                       const int min = 6;
+                       const int max = 12;
+
+                       string password = generate_password(min, max);
+
+                       //Encrypt the content
+                       fc::sha512::encoder enc;
+                       fc::raw::pack(enc, password);
+                       fc::sha512 pwd = enc.result();
+
+                       std::vector<char> encrypted = fc::aes_encrypt(pwd, fc::raw::pack_to_vector(download_data.resource));
+
+                       from_string(d.password, password);
+
+                       string enconded = fc::base64_encode(encrypted.data(), (unsigned int) encrypted.size());
+                       from_string(d.resource, enconded);
+                   }
+               }
+               FC_CAPTURE_AND_RETHROW( (o) )
+           });
+       }
+
+
    #endif
-
-
 
    } // end EDIT case
 
 } FC_CAPTURE_AND_RETHROW( (o) ) }
+
+void comment_download_evaluator::do_apply(const comment_download_operation& o)
+{
+   try {
+
+      //Checking comment exists
+      //wlog("Checking comment exists");
+      const auto& by_permlink_idx = _db.get_index< comment_index >().indices().get< by_permlink >();
+      auto itr = by_permlink_idx.find( boost::make_tuple( o.comment_author, o.comment_permlink ) );
+
+      FC_ASSERT(itr != by_permlink_idx.end(), "Comment not exists.");
+
+      //Checking if this user already paid the download
+      const auto& comment = *itr;
+      const comment_download_object& cdo = _db.get< comment_download_object, by_comment >( comment.id );
+
+      const auto& dBalance = _db.get_balance( o.downloader, cdo.price.symbol );
+      //wlog("cdo=${cdo}, dBalance=${dBalance}", ("cdo", cdo)("dBalance", dBalance));
+
+      const auto& granted_download_idx = _db.get_index< download_granted_index, by_downloader >();
+      auto gd_itr = granted_download_idx.lower_bound( o.downloader );
+
+      bool paid = false;
+      while (!paid && gd_itr != granted_download_idx.end()) {
+          paid = gd_itr->downloader == o.downloader && gd_itr->comment_author == o.comment_author && to_string( gd_itr->comment_permlink ) == o.comment_permlink;
+          ++gd_itr;
+      }
+
+      //wlog("Paid: ${p}", ("p", paid));
+      FC_ASSERT( !paid, "This account already paid the download");
+
+      FC_ASSERT( dBalance >= cdo.price, "Account does not have sufficient funds for download." );
+
+      //Store download payment for this user
+      //wlog("storing download");
+      _db.create< download_granted_object > ( [&]( download_granted_object& dgo )
+      {
+         dgo.downloader = o.downloader;
+         dgo.comment_author = o.comment_author;
+         from_string(dgo.comment_permlink, o.comment_permlink);
+         dgo.price = cdo.price;
+         dgo.payment_date = _db.head_block_time();
+         dgo.download = cdo.id;
+
+      });
+
+      //wlog("modfying comment_download_object");
+      _db.modify( _db.get< comment_download_object, by_id >( cdo.id ), [&]( comment_download_object& d) {
+          d.times_downloaded += 1;
+      });
+
+
+      //wlog("adjusting balance");
+      _db.adjust_balance( o.downloader, -cdo.price );
+      _db.adjust_balance( o.comment_author, cdo.price );
+
+      //wlog("terminating");
+   } FC_CAPTURE_AND_RETHROW( (o) )
+
+}
 
 void escrow_transfer_evaluator::do_apply( const escrow_transfer_operation& o )
 {
@@ -1378,16 +1565,17 @@ void pre_hf20_vote_evaluator( const vote_operation& o, database& _db )
       return;
    }
 
+
    const auto& comment_vote_idx = _db.get_index< comment_vote_index >().indices().get< by_comment_voter >();
    auto itr = comment_vote_idx.find( std::make_tuple( comment.id, voter.id ) );
 
-   int64_t elapsed_seconds = _db.head_block_time().sec_since_epoch() - voter.voting_manabar.last_update_time;
+   int64_t elapsed_seconds = _db.head_block_time().sec_since_epoch() - voter.voting_flowbar.last_update_time;
 
    if( _db.has_hardfork( CREA_HARDFORK_0_11 ) )
       FC_ASSERT( elapsed_seconds >= CREA_MIN_VOTE_INTERVAL_SEC, "Can only vote once every 3 seconds." );
 
-   int64_t regenerated_power = (CREA_100_PERCENT * elapsed_seconds) / CREA_VOTING_MANA_REGENERATION_SECONDS;
-   int64_t current_power     = std::min( int64_t(voter.voting_manabar.current_mana) + regenerated_power, int64_t(CREA_100_PERCENT) );
+   int64_t regenerated_power = (CREA_100_PERCENT * elapsed_seconds) / CREA_VOTING_FLOW_REGENERATION_SECONDS;
+   int64_t current_power     = std::min( int64_t(voter.voting_flowbar.current_flow) + regenerated_power, int64_t(CREA_100_PERCENT) );
    FC_ASSERT( current_power > 0, "Account currently does not have voting power." );
 
    int64_t  abs_weight    = abs(o.weight);
@@ -1398,7 +1586,7 @@ void pre_hf20_vote_evaluator( const vote_operation& o, database& _db )
    const dynamic_global_property_object& dgpo = _db.get_dynamic_global_properties();
 
    // The second multiplication is rounded up as of HF 259
-   int64_t max_vote_denom = dgpo.vote_power_reserve_rate * CREA_VOTING_MANA_REGENERATION_SECONDS;
+   int64_t max_vote_denom = dgpo.vote_power_reserve_rate * CREA_VOTING_FLOW_REGENERATION_SECONDS;
    FC_ASSERT( max_vote_denom > 0 );
 
    if( !_db.has_hardfork( CREA_HARDFORK_0_14__259 ) )
@@ -1409,9 +1597,13 @@ void pre_hf20_vote_evaluator( const vote_operation& o, database& _db )
    {
       used_power = (used_power + max_vote_denom - 1) / max_vote_denom;
    }
+
+    //wlog("used_power: ${up}", ("up", used_power));
    FC_ASSERT( used_power <= current_power, "Account does not have enough power to vote." );
 
    int64_t abs_rshares    = ((uint128_t( _db.get_effective_vesting_shares( voter, VESTS_SYMBOL ).amount.value ) * used_power) / (CREA_100_PERCENT)).to_uint64();
+
+    //wlog("abs_shares: ${as}", ("as", abs_rshares));
    if( !_db.has_hardfork( CREA_HARDFORK_0_14__259 ) && abs_rshares == 0 ) abs_rshares = 1;
 
    if( _db.has_hardfork( CREA_HARDFORK_0_20__1764 ) )
@@ -1458,9 +1650,9 @@ void pre_hf20_vote_evaluator( const vote_operation& o, database& _db )
       //if( used_power == 0 ) used_power = 1;
 
       _db.modify( voter, [&]( account_object& a ){
-         a.voting_manabar.current_mana = current_power - used_power;
+         a.voting_flowbar.current_flow = current_power - used_power;
          a.last_vote_time = _db.head_block_time();
-         a.voting_manabar.last_update_time = a.last_vote_time.sec_since_epoch();
+         a.voting_flowbar.last_update_time = a.last_vote_time.sec_since_epoch();
       });
 
       /// if the current net_rshares is less than 0, the post is getting 0 rewards so it is not factored into total rshares^2
@@ -1642,9 +1834,9 @@ void pre_hf20_vote_evaluator( const vote_operation& o, database& _db )
       }
 
       _db.modify( voter, [&]( account_object& a ){
-         a.voting_manabar.current_mana = current_power - used_power;
+         a.voting_flowbar.current_flow = current_power - used_power;
          a.last_vote_time = _db.head_block_time();
-         a.voting_manabar.last_update_time = a.last_vote_time.sec_since_epoch();
+         a.voting_flowbar.last_update_time = a.last_vote_time.sec_since_epoch();
       });
 
       /// if the current net_rshares is less than 0, the post is getting 0 rewards so it is not factored into total rshares^2
@@ -1788,27 +1980,35 @@ void hf20_vote_evaluator( const vote_operation& o, database& _db )
 
    _db.modify( voter, [&]( account_object& a )
    {
-      util::manabar_params params( util::get_effective_vesting_shares( a ), CREA_VOTING_MANA_REGENERATION_SECONDS );
-      a.voting_manabar.regenerate_mana( params, now );
+      util::flowbar_params params( util::get_effective_vesting_shares( a ), CREA_VOTING_FLOW_REGENERATION_SECONDS );
+      a.voting_flowbar.regenerate_flow( params, now );
    });
-   FC_ASSERT( voter.voting_manabar.current_mana > 0, "Account does not have enough mana to vote." );
+   FC_ASSERT( voter.voting_flowbar.current_flow > 0, "Account does not have enough flow to vote." );
 
    int16_t abs_weight = abs( o.weight );
-   uint128_t used_mana = ( uint128_t( voter.voting_manabar.current_mana ) * abs_weight * 60 * 60 * 24 ) / CREA_100_PERCENT;
+   uint128_t used_flow = ( uint128_t( voter.voting_flowbar.current_flow ) * abs_weight * 60 * 60 * 24 ) / CREA_100_PERCENT;
 
+   //wlog("abs_weight: ${mvd}", ("mvd", abs_weight));
+   //wlog("used_flow: ${mvd}", ("mvd", used_flow.to_uint64()));
    const dynamic_global_property_object& dgpo = _db.get_dynamic_global_properties();
 
-   int64_t max_vote_denom = dgpo.vote_power_reserve_rate * CREA_VOTING_MANA_REGENERATION_SECONDS;
+   int64_t max_vote_denom = dgpo.vote_power_reserve_rate * CREA_VOTING_FLOW_REGENERATION_SECONDS;
    FC_ASSERT( max_vote_denom > 0 );
 
-   used_mana = ( used_mana + max_vote_denom - 1 ) / max_vote_denom;
-   FC_ASSERT( voter.voting_manabar.has_mana( used_mana.to_uint64() ), "Account does not have enough mana to vote." );
+   //wlog("max_vote_denom: ${mvd}", ("mvd", max_vote_denom));
 
-   int64_t abs_rshares = used_mana.to_uint64();
 
+   used_flow = ( used_flow + max_vote_denom - 1 ) / max_vote_denom;
+  //wlog("used_flow: ${mvd}", ("mvd", used_flow.to_uint64()));
+   FC_ASSERT( voter.voting_flowbar.has_flow( used_flow.to_uint64() ), "Account does not have enough flow to vote." );
+
+   int64_t abs_rshares = used_flow.to_uint64();
+
+   //wlog("abs_rshares: ${mvd}", ("mvd", abs_rshares));
    abs_rshares -= CREA_VOTE_DUST_THRESHOLD;
    abs_rshares = std::max( int64_t(0), abs_rshares );
 
+   //wlog("abs_rshares: ${mvd}", ("mvd", abs_rshares));
    uint32_t cashout_delta = ( comment.cashout_time - _db.head_block_time() ).to_seconds();
 
    if( cashout_delta < CREA_UPVOTE_LOCKOUT_SECONDS )
@@ -1816,6 +2016,7 @@ void hf20_vote_evaluator( const vote_operation& o, database& _db )
       abs_rshares = (int64_t) ( ( uint128_t( abs_rshares ) * cashout_delta ) / CREA_UPVOTE_LOCKOUT_SECONDS ).to_uint64();
    }
 
+    //wlog("abs_rshares: ${mvd}", ("mvd", abs_rshares));
    if( itr == comment_vote_idx.end() )
    {
       FC_ASSERT( o.weight != 0, "Vote weight cannot be 0." );
@@ -1825,7 +2026,7 @@ void hf20_vote_evaluator( const vote_operation& o, database& _db )
 
       _db.modify( voter, [&]( account_object& a )
       {
-         a.voting_manabar.use_mana( used_mana.to_uint64() );
+         a.voting_flowbar.use_flow( used_flow.to_uint64() );
          a.last_vote_time = _db.head_block_time();
       });
 
@@ -1935,7 +2136,7 @@ void hf20_vote_evaluator( const vote_operation& o, database& _db )
 
       _db.modify( voter, [&]( account_object& a )
       {
-         a.voting_manabar.use_mana( used_mana.to_uint64() );
+         a.voting_flowbar.use_flow( used_flow.to_uint64() );
          a.last_vote_time = _db.head_block_time();
       });
 
@@ -2747,9 +2948,9 @@ void claim_reward_balance_evaluator::do_apply( const claim_reward_balance_operat
    {
       if( _db.has_hardfork( CREA_HARDFORK_0_20__2539 ) )
       {
-         util::manabar_params params( util::get_effective_vesting_shares( a ), CREA_VOTING_MANA_REGENERATION_SECONDS );
-         a.voting_manabar.regenerate_mana( params, _db.head_block_time() );
-         a.voting_manabar.use_mana( -op.reward_vests.amount.value );
+         util::flowbar_params params( util::get_effective_vesting_shares( a ), CREA_VOTING_FLOW_REGENERATION_SECONDS );
+         a.voting_flowbar.regenerate_flow( params, _db.head_block_time() );
+         a.voting_flowbar.use_flow( -op.reward_vests.amount.value );
       }
 
       a.vesting_shares += op.reward_vests;
@@ -2851,24 +3052,24 @@ void delegate_vesting_shares_evaluator::do_apply( const delegate_vesting_shares_
 
    if( _db.has_hardfork( CREA_HARDFORK_0_20__2539 ) )
    {
-      auto max_mana = util::get_effective_vesting_shares( delegator );
+      auto max_flow = util::get_effective_vesting_shares( delegator );
 
       _db.modify( delegator, [&]( account_object& a )
       {
-         util::manabar_params params( max_mana, CREA_VOTING_MANA_REGENERATION_SECONDS );
-         a.voting_manabar.regenerate_mana( params, _db.head_block_time() );
+         util::flowbar_params params( max_flow, CREA_VOTING_FLOW_REGENERATION_SECONDS );
+         a.voting_flowbar.regenerate_flow( params, _db.head_block_time() );
       });
 
-      available_shares = asset( delegator.voting_manabar.current_mana, VESTS_SYMBOL );
+      available_shares = asset( delegator.voting_flowbar.current_flow, VESTS_SYMBOL );
 
-      // Assume delegated VESTS are used first when consuming mana. You cannot delegate received vesting shares
-      available_shares.amount = std::min( available_shares.amount, max_mana - delegator.received_vesting_shares.amount );
+      // Assume delegated VESTS are used first when consuming flow. You cannot delegate received vesting shares
+      available_shares.amount = std::min( available_shares.amount, max_flow - delegator.received_vesting_shares.amount );
 
       if( delegator.next_vesting_withdrawal < fc::time_point_sec::maximum()
          && delegator.to_withdraw - delegator.withdrawn > delegator.vesting_withdraw_rate.amount )
       {
          /*
-         current voting mana does not include the current week's power down:
+         current voting flow does not include the current week's power down:
 
          std::min(
             account.vesting_withdraw_rate.amount.value,           // Weekly amount
@@ -2906,7 +3107,7 @@ void delegate_vesting_shares_evaluator::do_apply( const delegate_vesting_shares_
    // If delegation doesn't exist, create it
    if( delegation == nullptr )
    {
-      FC_ASSERT( available_shares >= op.vesting_shares, "Account ${acc} does not have enough mana to delegate. required: ${r} available: ${a}",
+      FC_ASSERT( available_shares >= op.vesting_shares, "Account ${acc} does not have enough flow to delegate. required: ${r} available: ${a}",
          ("acc", op.delegator)("r", op.vesting_shares)("a", available_shares) );
       FC_ASSERT( op.vesting_shares >= min_delegation, "Account must delegate a minimum of ${v}", ("v", min_delegation) );
 
@@ -2924,7 +3125,7 @@ void delegate_vesting_shares_evaluator::do_apply( const delegate_vesting_shares_
 
          if( _db.has_hardfork( CREA_HARDFORK_0_20__2539 ) )
          {
-            a.voting_manabar.use_mana( op.vesting_shares.amount.value );
+            a.voting_flowbar.use_flow( op.vesting_shares.amount.value );
          }
       });
 
@@ -2932,9 +3133,9 @@ void delegate_vesting_shares_evaluator::do_apply( const delegate_vesting_shares_
       {
          if( _db.has_hardfork( CREA_HARDFORK_0_20__2539 ) )
          {
-            util::manabar_params params( util::get_effective_vesting_shares( a ), CREA_VOTING_MANA_REGENERATION_SECONDS );
-            a.voting_manabar.regenerate_mana( params, _db.head_block_time() );
-            a.voting_manabar.use_mana( -op.vesting_shares.amount.value );
+            util::flowbar_params params( util::get_effective_vesting_shares( a ), CREA_VOTING_FLOW_REGENERATION_SECONDS );
+            a.voting_flowbar.regenerate_flow( params, _db.head_block_time() );
+            a.voting_flowbar.use_flow( -op.vesting_shares.amount.value );
          }
 
          a.received_vesting_shares += op.vesting_shares;
@@ -2946,7 +3147,7 @@ void delegate_vesting_shares_evaluator::do_apply( const delegate_vesting_shares_
       auto delta = op.vesting_shares - delegation->vesting_shares;
 
       FC_ASSERT( delta >= min_update, "Crea Energy increase is not enough of a difference. min_update: ${min}", ("min", min_update) );
-      FC_ASSERT( available_shares >= delta, "Account ${acc} does not have enough mana to delegate. required: ${r} available: ${a}",
+      FC_ASSERT( available_shares >= delta, "Account ${acc} does not have enough flow to delegate. required: ${r} available: ${a}",
          ("acc", op.delegator)("r", delta)("a", available_shares) );
 
       _db.modify( delegator, [&]( account_object& a )
@@ -2955,7 +3156,7 @@ void delegate_vesting_shares_evaluator::do_apply( const delegate_vesting_shares_
 
          if( _db.has_hardfork( CREA_HARDFORK_0_20__2539 ) )
          {
-            a.voting_manabar.use_mana( delta.amount.value );
+            a.voting_flowbar.use_flow( delta.amount.value );
          }
       });
 
@@ -2963,9 +3164,9 @@ void delegate_vesting_shares_evaluator::do_apply( const delegate_vesting_shares_
       {
          if( _db.has_hardfork( CREA_HARDFORK_0_20__2539 ) )
          {
-            util::manabar_params params( util::get_effective_vesting_shares( a ), CREA_VOTING_MANA_REGENERATION_SECONDS );
-            a.voting_manabar.regenerate_mana( params, _db.head_block_time() );
-            a.voting_manabar.use_mana( -delta.amount.value );
+            util::flowbar_params params( util::get_effective_vesting_shares( a ), CREA_VOTING_FLOW_REGENERATION_SECONDS );
+            a.voting_flowbar.regenerate_flow( params, _db.head_block_time() );
+            a.voting_flowbar.use_flow( -delta.amount.value );
          }
 
          a.received_vesting_shares += delta;
@@ -3004,11 +3205,11 @@ void delegate_vesting_shares_evaluator::do_apply( const delegate_vesting_shares_
 
          if( _db.has_hardfork( CREA_HARDFORK_0_20__2539 ) )
          {
-            a.voting_manabar.use_mana( delta.amount.value );
+            a.voting_flowbar.use_flow( delta.amount.value );
 
-            if( a.voting_manabar.current_mana < 0 )
+            if( a.voting_flowbar.current_flow < 0 )
             {
-               a.voting_manabar.current_mana = 0;
+               a.voting_flowbar.current_flow = 0;
             }
          }
       });

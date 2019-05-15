@@ -9,15 +9,23 @@ ENV BUILD_STEP ${BUILD_STEP}
 
 ENV LANG=en_US.UTF-8
 
+ENV NVM_DIR /usr/local/nvm
+ENV NODE_VERSION 10.15.3
+
+RUN mkdir -p $NVM_DIR
+
 RUN \
     apt-get update && \
     apt-get install -y \
+	apt-transport-https \
         autoconf \
         automake \
         autotools-dev \
         bsdmainutils \
         build-essential \
+	ca-certificates \
         cmake \
+	curl \
         doxygen \
         gdb \
         git \
@@ -51,11 +59,25 @@ RUN \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
     pip3 install gcovr
 
-ADD . /usr/local/src/creativecoin
+# Install nvm with node and npm
+RUN curl https://raw.githubusercontent.com/creationix/nvm/v0.34.0/install.sh | bash \
+    && . $NVM_DIR/nvm.sh \
+    && nvm install $NODE_VERSION \
+    && nvm alias default $NODE_VERSION \
+    && nvm use default
+
+ENV NODE_PATH $NVM_DIR/versions/node/v$NODE_VERSION/lib/node_modules
+ENV PATH      $NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH
+
+# Install Creary Tools Commands
+RUN npm install -g @creativechain-fdn/creary-tools
+
+ADD . /usr/local/src/crea
 
 RUN \
     if [ "$BUILD_STEP" = "1" ] || [ ! "$BUILD_STEP" ] ; then \
     cd /usr/local/src/crea && \
+    rm -rf /usr/local/src/crea/build && \
     git submodule update --init --recursive && \
     mkdir build && \
     cd build && \
@@ -67,14 +89,14 @@ RUN \
         -DSKIP_BY_TX_ID=ON \
         .. && \
     make -j$(nproc) chain_test test_fixed_string plugin_test && \
-    ./tests/chain_test && \
-    ./tests/plugin_test && \
-    ./programs/util/test_fixed_string && \
-    cd /usr/local/src/creativecoin && \
+#    ./tests/chain_test && \
+#    ./tests/plugin_test && \
+#    ./programs/util/test_fixed_string && \
+    cd /usr/local/src/crea && \
     doxygen && \
-    PYTHONPATH=programs/build_helpers \
-    python3 -m creativecoin_build_helpers.check_reflect && \
-    programs/build_helpers/get_config_check.sh && \
+#    PYTHONPATH=programs/build_helpers \
+#    python3 -m crea_build_helpers.check_reflect && \
+#    programs/build_helpers/get_config_check.sh && \
     rm -rf /usr/local/src/crea/build ; \
     fi
 
@@ -96,14 +118,14 @@ RUN \
         .. && \
     make -j$(nproc) chain_test test_fixed_string plugin_test && \
     make install && \
-    ./tests/chain_test && \
-    ./tests/plugin_test && \
-    ./programs/util/test_fixed_string && \
-    cd /usr/local/src/creativecoin && \
+#    ./tests/chain_test && \
+#    ./tests/plugin_test && \
+#    ./programs/util/test_fixed_string && \
+    cd /usr/local/src/crea && \
     doxygen && \
-    PYTHONPATH=programs/build_helpers \
-    python3 -m creativecoin_build_helpers.check_reflect && \
-    programs/build_helpers/get_config_check.sh && \
+#    PYTHONPATH=programs/build_helpers \
+#    python3 -m crea_build_helpers.check_reflect && \
+#    programs/build_helpers/get_config_check.sh && \
     rm -rf /usr/local/src/crea/build ; \
     fi
 
@@ -123,8 +145,8 @@ RUN \
         -DCHAINBASE_CHECK_LOCKING=OFF \
         .. && \
     make -j$(nproc) chain_test plugin_test && \
-    ./tests/chain_test && \
-    ./tests/plugin_test && \
+#    ./tests/chain_test && \
+#    ./tests/plugin_test && \
     mkdir -p /var/cobertura && \
     gcovr --object-directory="../" --root=../ --xml-pretty --gcov-exclude=".*tests.*" --gcov-exclude=".*fc.*" --gcov-exclude=".*app*" --gcov-exclude=".*net*" --gcov-exclude=".*plugins*" --gcov-exclude=".*schema*" --gcov-exclude=".*time*" --gcov-exclude=".*utilities*" --gcov-exclude=".*wallet*" --gcov-exclude=".*programs*" --gcov-exclude=".*vendor*" --output="/var/cobertura/coverage.xml" && \
     cd /usr/local/src/crea && \
@@ -179,8 +201,6 @@ RUN \
     apt-get remove -y \
         automake \
         autotools-dev \
-        bsdmainutils \
-        build-essential \
         cmake \
         doxygen \
         dpkg-dev \
@@ -199,28 +219,17 @@ RUN \
         libpython2.7-dev \
         libreadline-dev \
         libreadline6-dev \
-        libssl-dev \
         libstdc++-5-dev \
         libtinfo-dev \
         libtool \
         linux-libc-dev \
         m4 \
         make \
-        manpages \
-        manpages-dev \
-        mpi-default-dev \
         python-dev \
         python2.7-dev \
         python3-dev \
     && \
-    apt-get autoremove -y && \
-    rm -rf \
-        /var/lib/apt/lists/* \
-        /tmp/* \
-        /var/tmp/* \
-        /var/cache/* \
-        /usr/include \
-        /usr/local/include
+    apt-get autoremove -y
 
 RUN useradd -s /bin/bash -m -d /var/lib/cread cread
 
@@ -235,10 +244,12 @@ RUN chown cread:cread -R /var/lib/cread
 
 VOLUME ["/var/lib/cread"]
 
-# rpc service:
-EXPOSE 8090
+# http rpc service:
+EXPOSE 1996
+# ws rpc service:
+EXPOSE 1886
 # p2p service:
-EXPOSE 2001
+EXPOSE 1776
 
 # add seednodes from documentation to image
 ADD doc/seednodes.txt /etc/cread/seednodes.txt
@@ -251,8 +262,8 @@ ADD contrib/config-for-broadcaster.ini /etc/cread/config-for-broadcaster.ini
 ADD contrib/config-for-ahnode.ini /etc/cread/config-for-ahnode.ini
 
 # add normal startup script that starts via sv
-ADD contrib/cread.run /usr/local/bin/creativecoin-sv-run.sh
-RUN chmod +x /usr/local/bin/creativecoin-sv-run.sh
+ADD contrib/cread.run /usr/local/bin/crea-sv-run.sh
+RUN chmod +x /usr/local/bin/crea-sv-run.sh
 
 # add nginx templates
 ADD contrib/cread.nginx.conf /etc/nginx/cread.nginx.conf
@@ -264,11 +275,16 @@ ADD contrib/pulltestnetscripts.sh /usr/local/bin/pulltestnetscripts.sh
 ADD contrib/paas-sv-run.sh /usr/local/bin/paas-sv-run.sh
 ADD contrib/sync-sv-run.sh /usr/local/bin/sync-sv-run.sh
 ADD contrib/healthcheck.sh /usr/local/bin/healthcheck.sh
+ADD contrib/witness-price-updater.sh /etc/cread/witness-price-updater.sh
 RUN chmod +x /usr/local/bin/startpaascread.sh
 RUN chmod +x /usr/local/bin/pulltestnetscripts.sh
 RUN chmod +x /usr/local/bin/paas-sv-run.sh
 RUN chmod +x /usr/local/bin/sync-sv-run.sh
 RUN chmod +x /usr/local/bin/healthcheck.sh
+
+# Add cron for update witness feed automatically
+ADD contrib/crontab /etc/cread/crontab
+RUN crontab /etc/cread/crontab
 
 # new entrypoint for all instances
 # this enables exitting of the container when the writer node dies
@@ -277,3 +293,5 @@ RUN chmod +x /usr/local/bin/healthcheck.sh
 ADD contrib/creadentrypoint.sh /usr/local/bin/creadentrypoint.sh
 RUN chmod +x /usr/local/bin/creadentrypoint.sh
 CMD /usr/local/bin/creadentrypoint.sh
+
+

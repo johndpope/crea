@@ -9,6 +9,8 @@
 #include <crea/chain/transaction_object.hpp>
 #include <crea/chain/witness_objects.hpp>
 #include <crea/chain/database.hpp>
+#include <crea/plugins/follow/follow_objects.hpp>
+#include <fc/log/logger.hpp>
 
 namespace crea { namespace plugins { namespace database_api {
 
@@ -27,6 +29,68 @@ typedef witness_vote_object                    api_witness_vote_object;
 typedef vesting_delegation_object              api_vesting_delegation_object;
 typedef vesting_delegation_expiration_object   api_vesting_delegation_expiration_object;
 typedef reward_fund_object                     api_reward_fund_object;
+
+struct api_comment_download_object
+{
+    api_comment_download_object(const comment_download_object& o, const database& db):
+       id( o.id ), comment( o.comment ), resource( to_string(o.resource) ), name( to_string(o.name) ),
+       type( to_string(o.type) ), size( o.size ), times_downloaded( o.times_downloaded), password( to_string(o.password) ),
+       price( o.price )
+    {
+       auto comment = db.get< chain::comment_object, chain::by_id>( o.comment );
+       author = comment.author;
+       permlink = to_string( comment.permlink );
+
+        const auto& dgi = db.get_index< download_granted_index >().indices().get< by_downloader >();
+        auto itr = dgi.find( boost::make_tuple( comment.author, comment.permlink ) );
+
+        while (itr != dgi.end() && itr->comment_author == comment.author && to_string( itr->comment_permlink ) == to_string( comment.permlink )) {
+            if (std::find(downloaders.begin(), downloaders.end(), std::string( itr->downloader )) == downloaders.end())  {
+                downloaders.push_back( std::string( itr->downloader ) );
+            }
+            ++itr;
+        }
+
+    };
+
+    api_comment_download_object(){}
+
+    comment_download_id_type  id;
+    comment_id_type           comment;
+
+    account_name_type         author;
+    string                    permlink;
+    string                    resource;
+    string                    name;
+    string                    type;
+    uint32_t                  size = 0;
+    uint32_t                  times_downloaded = 0;
+    string                    password;
+    vector< string >          downloaders;
+    asset                     price;
+};
+
+struct api_download_granted_object
+{
+    api_download_granted_object(const download_granted_object& o, const database& db):
+       id( o.id ), download( o.download )
+    {
+       payment_date = o.payment_date;
+       comment_author = o.comment_author;
+       comment_permlink = to_string( o.comment_permlink );
+       price = o.price;
+    }
+
+    api_download_granted_object(){}
+
+    download_granted_id_type  id;
+    comment_download_id_type  download;
+
+    time_point_sec            payment_date;
+    account_name_type         comment_author;
+    string                    comment_permlink;
+    asset                     price;
+};
 
 struct api_comment_object
 {
@@ -78,6 +142,12 @@ struct api_comment_object
       title = to_string( con.title );
       body = to_string( con.body );
       json_metadata = to_string( con.json_metadata );
+
+      auto cdo = db.find< chain::comment_download_object, chain::by_comment >( o.id );
+      if (cdo != nullptr) {
+         api_comment_download_object acdo(*cdo, db);
+         download = acdo;
+      }
 #endif
    }
 
@@ -92,6 +162,7 @@ struct api_comment_object
 
    string            title;
    string            body;
+   api_comment_download_object download;
    string            json_metadata;
    time_point_sec    last_update;
    time_point_sec    created;
@@ -176,7 +247,7 @@ struct api_account_object
       lifetime_vote_count( a.lifetime_vote_count ),
       post_count( a.post_count ),
       can_vote( a.can_vote ),
-      voting_manabar( a.voting_manabar ),
+      voting_flowbar( a.voting_flowbar ),
       balance( a.balance ),
       savings_balance( a.savings_balance ),
       cbd_balance( a.cbd_balance ),
@@ -207,6 +278,8 @@ struct api_account_object
       last_root_post( a.last_root_post ),
       last_vote_time( a.last_vote_time ),
       post_bandwidth( a.post_bandwidth ),
+      follower_count(0),
+      following_count(0),
       pending_claimed_accounts( a.pending_claimed_accounts )
    {
       size_t n = a.proxied_vsf_votes.size();
@@ -224,6 +297,12 @@ struct api_account_object
       auto smt_obj_itr = by_control_account_index.find( name );
       is_smt = smt_obj_itr != by_control_account_index.end();
 #endif
+       auto follow_itr = db.find< crea::plugins::follow::follow_count_object, crea::plugins::follow::by_account >(name);
+
+       if ( follow_itr != nullptr) {
+           follower_count = follow_itr->follower_count;
+           following_count = follow_itr->following_count;
+       }
    }
 
 
@@ -252,7 +331,7 @@ struct api_account_object
    uint32_t          post_count = 0;
 
    bool              can_vote = false;
-   util::manabar     voting_manabar;
+   util::flowbar     voting_flowbar;
 
    asset             balance;
    asset             savings_balance;
@@ -294,7 +373,8 @@ struct api_account_object
    time_point_sec    last_root_post;
    time_point_sec    last_vote_time;
    uint32_t          post_bandwidth = 0;
-
+   uint32_t          follower_count = 0;
+   uint32_t          following_count = 0;
    share_type        pending_claimed_accounts = 0;
 
    bool              is_smt = false;
@@ -545,10 +625,19 @@ struct order_book
 
 } } } // crea::plugins::database_api
 
+FC_REFLECT( crea::plugins::database_api::api_comment_download_object,
+            (id)(author)(permlink)
+            (resource)(name)(type)(size)(times_downloaded)(price)(downloaders)
+)
+
+FC_REFLECT( crea::plugins::database_api::api_download_granted_object,
+            (id)(payment_date)(comment_author)(comment_permlink)(price)
+)
+
 FC_REFLECT( crea::plugins::database_api::api_comment_object,
              (id)(author)(permlink)
              (category)(parent_author)(parent_permlink)
-             (title)(body)(json_metadata)(last_update)(created)(active)(last_payout)
+             (title)(body)(download)(json_metadata)(last_update)(created)(active)(last_payout)
              (depth)(children)
              (net_rshares)(abs_rshares)(vote_rshares)
              (children_abs_rshares)(cashout_time)(max_cashout_time)
@@ -566,7 +655,7 @@ FC_REFLECT( crea::plugins::database_api::api_account_object,
              (id)(name)(owner)(active)(posting)(memo_key)(json_metadata)(proxy)(last_owner_update)(last_account_update)
              (created)(mined)
              (recovery_account)(last_account_recovery)(reset_account)
-             (comment_count)(lifetime_vote_count)(post_count)(can_vote)(voting_manabar)
+             (comment_count)(lifetime_vote_count)(post_count)(can_vote)(voting_flowbar)
              (balance)
              (savings_balance)
              (cbd_balance)(cbd_seconds)(cbd_seconds_last_update)(cbd_last_interest_payment)
@@ -577,7 +666,7 @@ FC_REFLECT( crea::plugins::database_api::api_account_object,
              (posting_rewards)
              (proxied_vsf_votes)(witnesses_voted_for)
              (last_post)(last_root_post)(last_vote_time)
-             (post_bandwidth)(pending_claimed_accounts)
+             (post_bandwidth)(follower_count)(following_count)(pending_claimed_accounts)
              (is_smt)
           )
 

@@ -31,6 +31,7 @@
 #include <crea/chain/history_object.hpp>
 
 #include <crea/plugins/account_history/account_history_plugin.hpp>
+#include <crea/plugins/witness/block_producer.hpp>
 
 #include <crea/utilities/tempdir.hpp>
 
@@ -41,6 +42,7 @@
 using namespace crea;
 using namespace crea::chain;
 using namespace crea::protocol;
+using namespace crea::plugins;
 
 #define TEST_SHARED_MEM_SIZE (1024 * 1024 * 8)
 
@@ -68,9 +70,10 @@ BOOST_AUTO_TEST_CASE( generate_empty_blocks )
       signed_block cutoff_block;
       {
          database db;
+         witness::block_producer bp( db );
          db._log_hardforks = false;
          open_test_database( db, data_dir.path() );
-         b = db.generate_block(db.get_slot_time(1), db.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+         b = bp.generate_block(db.get_slot_time(1), db.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
 
          // TODO:  Change this test when we correct #406
          // n.b. we generate CREA_MIN_UNDO_HISTORY+1 extra blocks which will be discarded on save
@@ -80,7 +83,7 @@ BOOST_AUTO_TEST_CASE( generate_empty_blocks )
             //witness_id_type prev_witness = b.witness;
             string cur_witness = db.get_scheduled_witness(1);
             //BOOST_CHECK( cur_witness != prev_witness );
-            b = db.generate_block(db.get_slot_time(1), cur_witness, init_account_priv_key, database::skip_nothing);
+            b = bp.generate_block(db.get_slot_time(1), cur_witness, init_account_priv_key, database::skip_nothing);
             BOOST_CHECK( b.witness == cur_witness );
             uint32_t cutoff_height = db.get_dynamic_global_properties().last_irreversible_block_num;
             if( cutoff_height >= 200 )
@@ -95,6 +98,7 @@ BOOST_AUTO_TEST_CASE( generate_empty_blocks )
       }
       {
          database db;
+         witness::block_producer bp( db );
          db._log_hardforks = false;
          open_test_database( db, data_dir.path() );
 
@@ -113,7 +117,7 @@ BOOST_AUTO_TEST_CASE( generate_empty_blocks )
             //witness_id_type prev_witness = b.witness;
             string cur_witness = db.get_scheduled_witness(1);
             //BOOST_CHECK( cur_witness != prev_witness );
-            b = db.generate_block(db.get_slot_time(1), cur_witness, init_account_priv_key, database::skip_nothing);
+            b = bp.generate_block(db.get_slot_time(1), cur_witness, init_account_priv_key, database::skip_nothing);
          }
 #ifndef ENABLE_STD_ALLOCATOR
          BOOST_CHECK_EQUAL( db.head_block_num(), cutoff_block.block_num()+200 );
@@ -131,6 +135,7 @@ BOOST_AUTO_TEST_CASE( undo_block )
       fc::temp_directory data_dir( crea::utilities::temp_directory_path() );
       {
          database db;
+         witness::block_producer bp( db );
          db._log_hardforks = false;
          open_test_database( db, data_dir.path() );
          fc::time_point_sec now( CREA_TESTING_GENESIS_TIMESTAMP );
@@ -141,7 +146,7 @@ BOOST_AUTO_TEST_CASE( undo_block )
          {
             now = db.get_slot_time(1);
             time_stack.push_back( now );
-            auto b = db.generate_block( now, db.get_scheduled_witness( 1 ), init_account_priv_key, database::skip_nothing );
+            auto b = bp.generate_block( now, db.get_scheduled_witness( 1 ), init_account_priv_key, database::skip_nothing );
          }
          BOOST_CHECK( db.head_block_num() == 5 );
          BOOST_CHECK( db.head_block_time() == now );
@@ -164,7 +169,7 @@ BOOST_AUTO_TEST_CASE( undo_block )
          {
             now = db.get_slot_time(1);
             time_stack.push_back( now );
-            auto b = db.generate_block( now, db.get_scheduled_witness( 1 ), init_account_priv_key, database::skip_nothing );
+            auto b = bp.generate_block( now, db.get_scheduled_witness( 1 ), init_account_priv_key, database::skip_nothing );
          }
          BOOST_CHECK( db.head_block_num() == 7 );
       }
@@ -183,29 +188,31 @@ BOOST_AUTO_TEST_CASE( fork_blocks )
       //TODO This test needs 6-7 ish witnesses prior to fork
 
       database db1;
+      witness::block_producer bp1( db1 );
       db1._log_hardforks = false;
       open_test_database( db1, data_dir1.path() );
       database db2;
+      witness::block_producer bp2( db2 );
       db2._log_hardforks = false;
       open_test_database( db2, data_dir2.path() );
 
       auto init_account_priv_key  = fc::ecc::private_key::regenerate(fc::sha256::hash(string("init_key")) );
       for( uint32_t i = 0; i < 10; ++i )
       {
-         auto b = db1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+         auto b = bp1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
          try {
             PUSH_BLOCK( db2, b );
          } FC_CAPTURE_AND_RETHROW( ("db2") );
       }
       for( uint32_t i = 10; i < 13; ++i )
       {
-         auto b =  db1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+         auto b =  bp1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
       }
       string db1_tip = db1.head_block_id().str();
       uint32_t next_slot = 3;
       for( uint32_t i = 13; i < 16; ++i )
       {
-         auto b =  db2.generate_block(db2.get_slot_time(next_slot), db2.get_scheduled_witness(next_slot), init_account_priv_key, database::skip_nothing);
+         auto b =  bp2.generate_block(db2.get_slot_time(next_slot), db2.get_scheduled_witness(next_slot), init_account_priv_key, database::skip_nothing);
          next_slot = 1;
          // notify both databases of the new block.
          // only db2 should switch to the new fork, db1 should not
@@ -220,7 +227,7 @@ BOOST_AUTO_TEST_CASE( fork_blocks )
       BOOST_CHECK_EQUAL(db1.head_block_num(), 13);
       BOOST_CHECK_EQUAL(db2.head_block_num(), 13);
       {
-         auto b = db2.generate_block(db2.get_slot_time(1), db2.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+         auto b = bp2.generate_block(db2.get_slot_time(1), db2.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
          good_block = b;
          b.transactions.emplace_back(signed_transaction());
          b.transactions.back().operations.emplace_back(transfer_operation());
@@ -248,6 +255,8 @@ BOOST_AUTO_TEST_CASE( switch_forks_undo_create )
                          dir2( crea::utilities::temp_directory_path() );
       database db1,
                db2;
+      witness::block_producer bp1( db1 ),
+                              bp2( db2 );
       db1._log_hardforks = false;
       open_test_database( db1, dir1.path() );
       db2._log_hardforks = false;
@@ -266,21 +275,21 @@ BOOST_AUTO_TEST_CASE( switch_forks_undo_create )
       cop.active = cop.owner;
       trx.operations.push_back(cop);
       trx.set_expiration( db1.head_block_time() + CREA_MAX_TIME_UNTIL_EXPIRATION );
-      trx.sign( init_account_priv_key, db1.get_chain_id() );
+      trx.sign( init_account_priv_key, db1.get_chain_id(), fc::ecc::fc_canonical );
       PUSH_TX( db1, trx );
       //*/
       // generate blocks
       // db1 : A
       // db2 : B C D
 
-      auto b = db1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+      auto b = bp1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
 
       auto alice_id = db1.get_account( "alice" ).id;
       BOOST_CHECK( db1.get(alice_id).name == "alice" );
 
-      b = db2.generate_block(db2.get_slot_time(1), db2.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+      b = bp2.generate_block(db2.get_slot_time(1), db2.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
       db1.push_block(b);
-      b = db2.generate_block(db2.get_slot_time(1), db2.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+      b = bp2.generate_block(db2.get_slot_time(1), db2.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
       db1.push_block(b);
       CREA_REQUIRE_THROW(db2.get(alice_id), std::exception);
       db1.get(alice_id); /// it should be included in the pending state
@@ -289,7 +298,7 @@ BOOST_AUTO_TEST_CASE( switch_forks_undo_create )
 
       PUSH_TX( db2, trx );
 
-      b = db2.generate_block(db2.get_slot_time(1), db2.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+      b = bp2.generate_block(db2.get_slot_time(1), db2.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
       db1.push_block(b);
 
       BOOST_CHECK( db1.get(alice_id).name == "alice");
@@ -307,6 +316,7 @@ BOOST_AUTO_TEST_CASE( duplicate_transactions )
                          dir2( crea::utilities::temp_directory_path() );
       database db1,
                db2;
+      witness::block_producer bp1( db1 );
       db1._log_hardforks = false;
       open_test_database( db1, dir1.path() );
       db2._log_hardforks = false;
@@ -326,7 +336,7 @@ BOOST_AUTO_TEST_CASE( duplicate_transactions )
       cop.active = cop.owner;
       trx.operations.push_back(cop);
       trx.set_expiration( db1.head_block_time() + CREA_MAX_TIME_UNTIL_EXPIRATION );
-      trx.sign( init_account_priv_key, db1.get_chain_id() );
+      trx.sign( init_account_priv_key, db1.get_chain_id(), fc::ecc::fc_canonical );
       PUSH_TX( db1, trx, skip_sigs );
 
       trx = decltype(trx)();
@@ -336,12 +346,12 @@ BOOST_AUTO_TEST_CASE( duplicate_transactions )
       t.amount = asset(500,CREA_SYMBOL);
       trx.operations.push_back(t);
       trx.set_expiration( db1.head_block_time() + CREA_MAX_TIME_UNTIL_EXPIRATION );
-      trx.sign( init_account_priv_key, db1.get_chain_id() );
+      trx.sign( init_account_priv_key, db1.get_chain_id(), fc::ecc::fc_canonical );
       PUSH_TX( db1, trx, skip_sigs );
 
       CREA_CHECK_THROW(PUSH_TX( db1, trx, skip_sigs ), fc::exception);
 
-      auto b = db1.generate_block( db1.get_slot_time(1), db1.get_scheduled_witness( 1 ), init_account_priv_key, skip_sigs );
+      auto b = bp1.generate_block( db1.get_slot_time(1), db1.get_scheduled_witness( 1 ), init_account_priv_key, skip_sigs );
       PUSH_BLOCK( db2, b, skip_sigs );
 
       CREA_CHECK_THROW(PUSH_TX( db1, trx, skip_sigs ), fc::exception);
@@ -359,13 +369,14 @@ BOOST_AUTO_TEST_CASE( tapos )
    try {
       fc::temp_directory dir1( crea::utilities::temp_directory_path() );
       database db1;
+      witness::block_producer bp1( db1 );
       db1._log_hardforks = false;
       open_test_database( db1, dir1.path() );
 
       auto init_account_priv_key  = fc::ecc::private_key::regenerate(fc::sha256::hash(string("init_key")) );
       public_key_type init_account_pub_key  = init_account_priv_key.get_public_key();
 
-      auto b = db1.generate_block( db1.get_slot_time(1), db1.get_scheduled_witness( 1 ), init_account_priv_key, database::skip_nothing);
+      auto b = bp1.generate_block( db1.get_slot_time(1), db1.get_scheduled_witness( 1 ), init_account_priv_key, database::skip_nothing);
 
       BOOST_TEST_MESSAGE( "Creating a transaction with reference block" );
       idump((db1.head_block_id()));
@@ -380,13 +391,13 @@ BOOST_AUTO_TEST_CASE( tapos )
       cop.active = cop.owner;
       trx.operations.push_back(cop);
       trx.set_expiration( db1.head_block_time() + CREA_MAX_TIME_UNTIL_EXPIRATION );
-      trx.sign( init_account_priv_key, db1.get_chain_id() );
+      trx.sign( init_account_priv_key, db1.get_chain_id(), fc::ecc::fc_canonical );
 
       BOOST_TEST_MESSAGE( "Pushing Pending Transaction" );
       idump((trx));
       db1.push_transaction(trx);
       BOOST_TEST_MESSAGE( "Generating a block" );
-      b = db1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+      b = bp1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
       trx.clear();
 
       transfer_operation t;
@@ -395,13 +406,13 @@ BOOST_AUTO_TEST_CASE( tapos )
       t.amount = asset(50,CREA_SYMBOL);
       trx.operations.push_back(t);
       trx.set_expiration( db1.head_block_time() + fc::seconds(2) );
-      trx.sign( init_account_priv_key, db1.get_chain_id() );
+      trx.sign( init_account_priv_key, db1.get_chain_id(), fc::ecc::fc_canonical );
       idump((trx)(db1.head_block_time()));
-      b = db1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+      b = bp1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
       idump((b));
-      b = db1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
+      b = bp1.generate_block(db1.get_slot_time(1), db1.get_scheduled_witness(1), init_account_priv_key, database::skip_nothing);
       trx.signatures.clear();
-      trx.sign( init_account_priv_key, db1.get_chain_id() );
+      trx.sign( init_account_priv_key, db1.get_chain_id(), fc::ecc::fc_canonical );
       BOOST_REQUIRE_THROW( db1.push_transaction(trx, 0/*database::skip_transaction_signatures | database::skip_authority_check*/), fc::exception );
    } catch (fc::exception& e) {
       edump((e.to_detail_string()));
@@ -434,14 +445,14 @@ BOOST_FIXTURE_TEST_CASE( optional_tapos, clean_database_fixture )
       tx.ref_block_prefix = 0;
       tx.signatures.clear();
       tx.set_expiration( db->head_block_time() + CREA_MAX_TIME_UNTIL_EXPIRATION );
-      tx.sign( alice_private_key, db->get_chain_id() );
+      sign( tx, alice_private_key );
       PUSH_TX( *db, tx );
 
       BOOST_TEST_MESSAGE( "proper ref_block_num, ref_block_prefix" );
 
       tx.signatures.clear();
       tx.set_expiration( db->head_block_time() + CREA_MAX_TIME_UNTIL_EXPIRATION );
-      tx.sign( alice_private_key, db->get_chain_id() );
+      sign( tx, alice_private_key );
       PUSH_TX( *db, tx, database::skip_transaction_dupe_check );
 
       BOOST_TEST_MESSAGE( "ref_block_num=0, ref_block_prefix=12345678" );
@@ -450,7 +461,7 @@ BOOST_FIXTURE_TEST_CASE( optional_tapos, clean_database_fixture )
       tx.ref_block_prefix = 0x12345678;
       tx.signatures.clear();
       tx.set_expiration( db->head_block_time() + CREA_MAX_TIME_UNTIL_EXPIRATION );
-      tx.sign( alice_private_key, db->get_chain_id() );
+      sign( tx, alice_private_key );
       CREA_REQUIRE_THROW( PUSH_TX( *db, tx, database::skip_transaction_dupe_check ), fc::exception );
 
       BOOST_TEST_MESSAGE( "ref_block_num=1, ref_block_prefix=12345678" );
@@ -459,7 +470,7 @@ BOOST_FIXTURE_TEST_CASE( optional_tapos, clean_database_fixture )
       tx.ref_block_prefix = 0x12345678;
       tx.signatures.clear();
       tx.set_expiration( db->head_block_time() + CREA_MAX_TIME_UNTIL_EXPIRATION );
-      tx.sign( alice_private_key, db->get_chain_id() );
+      sign( tx, alice_private_key );
       CREA_REQUIRE_THROW( PUSH_TX( *db, tx, database::skip_transaction_dupe_check ), fc::exception );
 
       BOOST_TEST_MESSAGE( "ref_block_num=9999, ref_block_prefix=12345678" );
@@ -468,7 +479,7 @@ BOOST_FIXTURE_TEST_CASE( optional_tapos, clean_database_fixture )
       tx.ref_block_prefix = 0x12345678;
       tx.signatures.clear();
       tx.set_expiration( db->head_block_time() + CREA_MAX_TIME_UNTIL_EXPIRATION );
-      tx.sign( alice_private_key, db->get_chain_id() );
+      sign( tx, alice_private_key );
       CREA_REQUIRE_THROW( PUSH_TX( *db, tx, database::skip_transaction_dupe_check ), fc::exception );
    }
    catch (fc::exception& e)
@@ -505,19 +516,19 @@ BOOST_FIXTURE_TEST_CASE( double_sign_check, clean_database_fixture )
    CREA_REQUIRE_THROW( db->push_transaction(trx, 0), fc::exception );
 
    BOOST_TEST_MESSAGE( "Verify that double-signing causes an exception" );
-   trx.sign( bob_private_key, db->get_chain_id() );
-   trx.sign( bob_private_key, db->get_chain_id() );
+   sign( trx, bob_private_key );
+   sign( trx, bob_private_key );
    CREA_REQUIRE_THROW( db->push_transaction(trx, 0), tx_duplicate_sig );
 
    BOOST_TEST_MESSAGE( "Verify that signing with an extra, unused key fails" );
    trx.signatures.pop_back();
-   trx.sign( generate_private_key("bogus" ), db->get_chain_id() );
+   sign( trx, generate_private_key( "bogus" ) );
    CREA_REQUIRE_THROW( db->push_transaction(trx, 0), tx_irrelevant_sig );
 
    BOOST_TEST_MESSAGE( "Verify that signing once with the proper key passes" );
    trx.signatures.pop_back();
    db->push_transaction(trx, 0);
-   trx.sign( bob_private_key, db->get_chain_id() );
+   sign( trx, bob_private_key );
 
 } FC_LOG_AND_RETHROW() }
 
@@ -702,11 +713,12 @@ BOOST_FIXTURE_TEST_CASE( skip_block, clean_database_fixture )
       BOOST_TEST_MESSAGE( "Skipping blocks through db" );
       BOOST_REQUIRE( db->head_block_num() == 2 );
 
+      witness::block_producer bp( *db );
       int init_block_num = db->head_block_num();
       int miss_blocks = fc::minutes( 1 ).to_seconds() / CREA_BLOCK_INTERVAL;
       auto witness = db->get_scheduled_witness( miss_blocks );
       auto block_time = db->get_slot_time( miss_blocks );
-      db->generate_block( block_time , witness, init_account_priv_key, 0 );
+      bp.generate_block( block_time , witness, init_account_priv_key, 0 );
 
       BOOST_CHECK_EQUAL( db->head_block_num(), init_block_num + 1 );
       BOOST_CHECK( db->head_block_time() == block_time );
@@ -788,7 +800,9 @@ BOOST_FIXTURE_TEST_CASE( hardfork_test, database_fixture )
 
       BOOST_REQUIRE( db->has_hardfork( 0 ) );
       BOOST_REQUIRE( db->has_hardfork( CREA_HARDFORK_0_1 ) );
-      BOOST_REQUIRE( get_last_operations( 1 )[0].get< custom_operation >().data == vector< char >( op_msg.begin(), op_msg.end() ) );
+      operation hardfork_vop = hardfork_operation( CREA_HARDFORK_0_1 );
+
+      BOOST_REQUIRE( get_last_operations( 1 )[0] == hardfork_vop );
       BOOST_REQUIRE( db->get(itr->op).timestamp == db->head_block_time() );
 
       BOOST_TEST_MESSAGE( "Testing hardfork is only applied once" );
@@ -799,10 +813,63 @@ BOOST_FIXTURE_TEST_CASE( hardfork_test, database_fixture )
 
       BOOST_REQUIRE( db->has_hardfork( 0 ) );
       BOOST_REQUIRE( db->has_hardfork( CREA_HARDFORK_0_1 ) );
-      BOOST_REQUIRE( get_last_operations( 1 )[0].get< custom_operation >().data == vector< char >( op_msg.begin(), op_msg.end() ) );
+      BOOST_REQUIRE( get_last_operations( 1 )[0] == hardfork_vop );
       BOOST_REQUIRE( db->get(itr->op).timestamp == db->head_block_time() - CREA_BLOCK_INTERVAL );
 
       db->wipe( data_dir->path(), data_dir->path(), true );
+   }
+   FC_LOG_AND_RETHROW()
+}
+
+BOOST_FIXTURE_TEST_CASE( generate_block_size, clean_database_fixture )
+{
+   try
+   {
+      db_plugin->debug_update( [=]( database& db )
+      {
+         db.modify( db.get_dynamic_global_properties(), [&]( dynamic_global_property_object& gpo )
+         {
+            gpo.maximum_block_size = CREA_MIN_BLOCK_SIZE_LIMIT;
+         });
+      });
+      generate_block();
+
+      signed_transaction tx;
+      tx.set_expiration( db->head_block_time() + CREA_MAX_TIME_UNTIL_EXPIRATION );
+
+      transfer_operation op;
+      op.from = CREA_INIT_MINER_NAME;
+      op.to = CREA_TEMP_ACCOUNT;
+      op.amount = asset( 1000, CREA_SYMBOL );
+
+      // tx minus op is 79 bytes
+      // op is 33 bytes (32 for op + 1 byte static variant tag)
+      // total is 65254
+      // Original generation logic only allowed 115 bytes for the header
+      // We are targetting a size (minus header) of 65421 which creates a block of "size" 65535
+      // This block will actually be larger because the header estimates is too small
+
+      for( size_t i = 0; i < 1975; i++ )
+      {
+         tx.operations.push_back( op );
+      }
+
+      sign( tx, init_account_priv_key );
+      db->push_transaction( tx, 0 );
+
+      // Second transaction, tx minus op is 78 (one less byte for operation vector size)
+      // We need a 88 byte op. We need a 22 character memo (1 byte for length) 55 = 32 (old op) + 55 + 1
+      op.memo = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123";
+      tx.clear();
+      tx.operations.push_back( op );
+      sign( tx, init_account_priv_key );
+      db->push_transaction( tx, 0 );
+
+      generate_block();
+
+      // The last transfer should have been delayed due to size
+      auto head_block = db->fetch_block_by_number( db->head_block_num() );
+      BOOST_REQUIRE( head_block->transactions.size() == 1 );
    }
    FC_LOG_AND_RETHROW()
 }

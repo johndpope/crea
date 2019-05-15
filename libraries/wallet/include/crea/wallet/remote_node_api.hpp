@@ -22,7 +22,7 @@ using namespace plugins::witness;*/
 struct remote_node_api
 {
    condenser_api::get_version_return get_version();
-   vector< condenser_api::api_tag_object > get_trending_tags( string, uint32_t );
+   vector< condenser_api::api_tag_object > get_popular_tags( string, uint32_t );
    condenser_api::state get_state( string );
    vector< account_name_type > get_active_witnesses();
    optional< block_header > get_block_header( uint32_t );
@@ -47,7 +47,6 @@ struct remote_node_api
    optional< database_api::api_account_recovery_request_object > get_recovery_request( account_name_type );
    optional< condenser_api::api_escrow_object > get_escrow( account_name_type, uint32_t );
    vector< database_api::api_withdraw_vesting_route_object > get_withdraw_routes( account_name_type, condenser_api::withdraw_route_type );
-   optional< witness::api_account_bandwidth_object > get_account_bandwidth( account_name_type, witness::bandwidth_type );
    vector< condenser_api::api_savings_withdraw_object > get_savings_withdraw_from( account_name_type );
    vector< condenser_api::api_savings_withdraw_object > get_savings_withdraw_to( account_name_type );
    vector< condenser_api::api_vesting_delegation_object > get_vesting_delegations( account_name_type, account_name_type, uint32_t );
@@ -59,6 +58,7 @@ struct remote_node_api
    vector< account_name_type > lookup_witness_accounts( string, uint32_t );
    uint64_t get_witness_count();
    vector< condenser_api::api_limit_order_object > get_open_orders( account_name_type );
+   condenser_api::api_download_granted_object get_download( account_name_type, account_name_type, string, string );
    string get_transaction_hex( condenser_api::legacy_signed_transaction );
    condenser_api::legacy_signed_transaction get_transaction( transaction_id_type );
    set< public_key_type > get_required_signatures( condenser_api::legacy_signed_transaction, flat_set< public_key_type > );
@@ -73,13 +73,13 @@ struct remote_node_api
    vector< condenser_api::discussion > get_discussions_by_payout( tags::discussion_query );
    vector< condenser_api::discussion > get_post_discussions_by_payout( tags::discussion_query );
    vector< condenser_api::discussion > get_comment_discussions_by_payout( tags::discussion_query );
-   vector< condenser_api::discussion > get_discussions_by_trending( tags::discussion_query );
-   vector< condenser_api::discussion > get_discussions_by_created( tags::discussion_query );
+   vector< condenser_api::discussion > get_discussions_by_popular( tags::discussion_query );
+   vector< condenser_api::discussion > get_discussions_by_now( tags::discussion_query );
    vector< condenser_api::discussion > get_discussions_by_active( tags::discussion_query );
    vector< condenser_api::discussion > get_discussions_by_cashout( tags::discussion_query );
    vector< condenser_api::discussion > get_discussions_by_votes( tags::discussion_query );
    vector< condenser_api::discussion > get_discussions_by_children( tags::discussion_query );
-   vector< condenser_api::discussion > get_discussions_by_hot( tags::discussion_query );
+   vector< condenser_api::discussion > get_discussions_by_skyrockets( tags::discussion_query );
    vector< condenser_api::discussion > get_discussions_by_feed( tags::discussion_query );
    vector< condenser_api::discussion > get_discussions_by_blog( tags::discussion_query );
    vector< condenser_api::discussion > get_discussions_by_comments( tags::discussion_query );
@@ -113,7 +113,7 @@ struct remote_node_api
 
 FC_API( crea::wallet::remote_node_api,
         (get_version)
-        (get_trending_tags)
+        (get_popular_tags)
         (get_state)
         (get_active_witnesses)
         (get_block_header)
@@ -138,7 +138,6 @@ FC_API( crea::wallet::remote_node_api,
         (get_recovery_request)
         (get_escrow)
         (get_withdraw_routes)
-        (get_account_bandwidth)
         (get_savings_withdraw_from)
         (get_savings_withdraw_to)
         (get_vesting_delegations)
@@ -150,6 +149,7 @@ FC_API( crea::wallet::remote_node_api,
         (lookup_witness_accounts)
         (get_witness_count)
         (get_open_orders)
+        (get_download)
         (get_transaction_hex)
         (get_transaction)
         (get_required_signatures)
@@ -164,13 +164,13 @@ FC_API( crea::wallet::remote_node_api,
         (get_discussions_by_payout)
         (get_post_discussions_by_payout)
         (get_comment_discussions_by_payout)
-        (get_discussions_by_trending)
-        (get_discussions_by_created)
+        (get_discussions_by_popular)
+        (get_discussions_by_now)
         (get_discussions_by_active)
         (get_discussions_by_cashout)
         (get_discussions_by_votes)
         (get_discussions_by_children)
-        (get_discussions_by_hot)
+        (get_discussions_by_skyrockets)
         (get_discussions_by_feed)
         (get_discussions_by_blog)
         (get_discussions_by_comments)

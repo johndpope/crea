@@ -10,13 +10,13 @@
 #include <crea/plugins/follow_api/follow_api_plugin.hpp>
 #include <crea/plugins/reputation_api/reputation_api_plugin.hpp>
 #include <crea/plugins/market_history_api/market_history_api_plugin.hpp>
-#include <crea/plugins/witness_api/witness_api_plugin.hpp>
 
 #include <crea/utilities/git_revision.hpp>
 
 #include <crea/chain/util/reward.hpp>
 #include <crea/chain/util/uint256.hpp>
 
+#include <fc/crypto/aes.hpp>
 #include <fc/git_revision.hpp>
 
 #include <boost/range/iterator_range.hpp>
@@ -49,7 +49,7 @@ namespace detail
 
          DECLARE_API_IMPL(
             (get_version)
-            (get_trending_tags)
+            (get_popular_tags)
             (get_state)
             (get_active_witnesses)
             (get_block_header)
@@ -74,7 +74,6 @@ namespace detail
             (get_recovery_request)
             (get_escrow)
             (get_withdraw_routes)
-            (get_account_bandwidth)
             (get_savings_withdraw_from)
             (get_savings_withdraw_to)
             (get_vesting_delegations)
@@ -95,17 +94,18 @@ namespace detail
             (get_active_votes)
             (get_account_votes)
             (get_content)
+            (get_download)
             (get_content_replies)
             (get_tags_used_by_author)
             (get_post_discussions_by_payout)
             (get_comment_discussions_by_payout)
-            (get_discussions_by_trending)
-            (get_discussions_by_created)
+            (get_discussions_by_popular)
+            (get_discussions_by_now)
             (get_discussions_by_active)
             (get_discussions_by_cashout)
             (get_discussions_by_votes)
             (get_discussions_by_children)
-            (get_discussions_by_hot)
+            (get_discussions_by_skyrockets)
             (get_discussions_by_feed)
             (get_discussions_by_blog)
             (get_discussions_by_comments)
@@ -155,7 +155,6 @@ namespace detail
          std::shared_ptr< follow::follow_api >                             _follow_api;
          std::shared_ptr< reputation::reputation_api >                     _reputation_api;
          std::shared_ptr< market_history::market_history_api >             _market_history_api;
-         std::shared_ptr< witness::witness_api >                           _witness_api;
 
          map< transaction_id_type, confirmation_callback >                 _callbacks;
          map< time_point_sec, vector< transaction_id_type > >              _callback_expirations;
@@ -175,12 +174,12 @@ namespace detail
       );
    }
 
-   DEFINE_API_IMPL( condenser_api_impl, get_trending_tags )
+   DEFINE_API_IMPL( condenser_api_impl, get_popular_tags )
    {
       CHECK_ARG_SIZE( 2 )
       FC_ASSERT( _tags_api, "tags_api_plugin not enabled." );
 
-      auto tags = _tags_api->get_trending_tags( { args[0].as< string >(), args[1].as< uint32_t >() } ).tags;
+      auto tags = _tags_api->get_popular_tags( { args[0].as< string >(), args[1].as< uint32_t >() } ).tags;
       vector< api_tag_object > result;
 
       for( const auto& t : tags )
@@ -207,15 +206,15 @@ namespace detail
             path = path.substr(1); /// remove '/' from front
 
          if( !path.size() )
-            path = "trending";
+            path = "popular";
 
          /// FETCH CATEGORY STATE
          if( _tags_api )
          {
-            auto trending_tags = _tags_api->get_trending_tags( { std::string(), 50 } ).tags;
-            for( const auto& t : trending_tags )
+            auto popular_tags = _tags_api->get_popular_tags( { std::string(), 50 } ).tags;
+            for( const auto& t : popular_tags )
             {
-               _state.tag_idx.trending.push_back( t.name );
+               _state.tag_idx.popular.push_back( t.name );
             }
          }
          /// END FETCH CATEGORY STATE
@@ -231,6 +230,7 @@ namespace detail
          if( part[0].size() && part[0][0] == '@' ) {
             auto acnt = part[0].substr(1);
             _state.accounts[acnt] = extended_account( database_api::api_account_object( _db.get_account( acnt ), _db ) );
+
 
             if( _tags_api )
                _state.accounts[acnt].tags_usage = _tags_api->get_tags_used_by_author( { acnt } ).tags;
@@ -274,6 +274,7 @@ namespace detail
                         case operation::tag<fill_convert_request_operation>::value:
                         case operation::tag<fill_order_operation>::value:
                         case operation::tag<claim_reward_balance_operation>::value:
+                        case operation::tag<comment_download_operation>::value:
                            if( item.second.op.visit( visitor ) )
                            {
                               eacnt.transfer_history.emplace( item.first, api_operation_object( item.second, visitor.l_op ) );
@@ -428,7 +429,7 @@ namespace detail
                _state.witnesses[w.owner] = w;
             }
          }
-         else if( part[0] == "trending"  )
+         else if( part[0] == "popular"  )
          {
             if( _tags_api )
             {
@@ -436,13 +437,13 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_discussions_by_trending( q ).discussions;
+               auto popular_disc = _tags_api->get_discussions_by_popular( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
-                  didx.trending.push_back( key );
+                  didx.popular.push_back( key );
                   if( d.author.size() ) accounts.insert(d.author);
                   _state.content[key] = std::move(d);
                }
@@ -456,10 +457,10 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_post_discussions_by_payout( q ).discussions;
+               auto popular_disc = _tags_api->get_post_discussions_by_payout( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
                   didx.payout.push_back( key );
@@ -476,10 +477,10 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_comment_discussions_by_payout( q ).discussions;
+               auto popular_disc = _tags_api->get_comment_discussions_by_payout( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
                   didx.payout_comments.push_back( key );
@@ -496,10 +497,10 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_discussions_by_promoted( q ).discussions;
+               auto popular_disc = _tags_api->get_discussions_by_promoted( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
                   didx.promoted.push_back( key );
@@ -516,10 +517,10 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_discussions_by_children( q ).discussions;
+               auto popular_disc = _tags_api->get_discussions_by_children( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
                   didx.responses.push_back( key );
@@ -528,7 +529,7 @@ namespace detail
                }
             }
          }
-         else if( !part[0].size() || part[0] == "hot" )
+         else if( !part[0].size() || part[0] == "skyrockets" )
          {
             if( _tags_api )
             {
@@ -536,13 +537,13 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_discussions_by_hot( q ).discussions;
+               auto popular_disc = _tags_api->get_discussions_by_skyrockets( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
-                  didx.hot.push_back( key );
+                  didx.skyrockets.push_back( key );
                   if( d.author.size() ) accounts.insert(d.author);
                   _state.content[key] = std::move(d);
                }
@@ -556,10 +557,10 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_discussions_by_promoted( q ).discussions;
+               auto popular_disc = _tags_api->get_discussions_by_promoted( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
                   didx.promoted.push_back( key );
@@ -576,10 +577,10 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_discussions_by_votes( q ).discussions;
+               auto popular_disc = _tags_api->get_discussions_by_votes( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
                   didx.votes.push_back( key );
@@ -596,10 +597,10 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_discussions_by_cashout( q ).discussions;
+               auto popular_disc = _tags_api->get_discussions_by_cashout( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
                   didx.cashout.push_back( key );
@@ -616,10 +617,10 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_discussions_by_active( q ).discussions;
+               auto popular_disc = _tags_api->get_discussions_by_active( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
                   didx.active.push_back( key );
@@ -628,7 +629,7 @@ namespace detail
                }
             }
          }
-         else if( part[0] == "created"  )
+         else if( part[0] == "now"  )
          {
             if( _tags_api )
             {
@@ -636,13 +637,13 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_discussions_by_created( q ).discussions;
+               auto popular_disc = _tags_api->get_discussions_by_now( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
-                  didx.created.push_back( key );
+                  didx.now.push_back( key );
                   if( d.author.size() ) accounts.insert(d.author);
                   _state.content[key] = std::move(d);
                }
@@ -656,13 +657,13 @@ namespace detail
                q.tag = tag;
                q.limit = 20;
                q.truncate_body = 1024;
-               auto trending_disc = _tags_api->get_discussions_by_created( q ).discussions;
+               auto popular_disc = _tags_api->get_discussions_by_now( q ).discussions;
 
                auto& didx = _state.discussion_idx[tag];
-               for( const auto& d : trending_disc )
+               for( const auto& d : popular_disc )
                {
                   string key = d.author + "/" + d.permlink;
-                  didx.created.push_back( key );
+                  didx.now.push_back( key );
                   if( d.author.size() ) accounts.insert(d.author);
                   _state.content[key] = std::move(d);
                }
@@ -672,12 +673,12 @@ namespace detail
          {
             if( _tags_api )
             {
-               _state.tag_idx.trending.clear();
-               auto trending_tags = _tags_api->get_trending_tags( { std::string(), 250 } ).tags;
-               for( const auto& t : trending_tags )
+               _state.tag_idx.popular.clear();
+               auto popular_tags = _tags_api->get_popular_tags( { std::string(), 250 } ).tags;
+               for( const auto& t : popular_tags )
                {
                   string name = t.name;
-                  _state.tag_idx.trending.push_back( name );
+                  _state.tag_idx.popular.push_back( name );
                   _state.tags[ name ] = api_tag_object( t );
                }
             }
@@ -785,13 +786,6 @@ namespace detail
    {
       CHECK_ARG_SIZE( 0 )
       get_dynamic_global_properties_return gpo = _database_api->get_dynamic_global_properties( {} );
-      if( _witness_api )
-      {
-         auto reserve_ratio = _witness_api->get_reserve_ratio( {} );
-         gpo.average_block_size = reserve_ratio.average_block_size;
-         gpo.current_reserve_ratio = reserve_ratio.current_reserve_ratio;
-         gpo.max_virtual_bandwidth = reserve_ratio.max_virtual_bandwidth;
-      }
 
       return gpo;
    }
@@ -881,26 +875,6 @@ namespace detail
                results.back().reputation = _reputation_api->get_account_reputations( { itr->name, 1 } ).reputations[0].reputation;
             }
 
-            if( _witness_api )
-            {
-               auto& e_acct = results.back();
-               auto forum_bandwidth = _witness_api->get_account_bandwidth( { itr->name, witness::bandwidth_type::forum } );
-               if( forum_bandwidth.bandwidth.valid() )
-               {
-                  e_acct.average_bandwidth = forum_bandwidth.bandwidth->average_bandwidth;
-                  e_acct.lifetime_bandwidth = forum_bandwidth.bandwidth->lifetime_bandwidth;
-                  e_acct.last_bandwidth_update = forum_bandwidth.bandwidth->last_bandwidth_update;
-               }
-
-               auto market_bandwidth = _witness_api->get_account_bandwidth( { itr->name, witness::bandwidth_type::market } );
-               if( market_bandwidth.bandwidth.valid() )
-               {
-                  e_acct.average_market_bandwidth = market_bandwidth.bandwidth->average_bandwidth;
-                  e_acct.lifetime_market_bandwidth = market_bandwidth.bandwidth->lifetime_bandwidth;
-                  e_acct.last_market_bandwidth_update = market_bandwidth.bandwidth->last_bandwidth_update;
-               }
-            }
-
             auto vitr = vidx.lower_bound( boost::make_tuple( itr->name, account_name_type() ) );
             while( vitr != vidx.end() && vitr->account == itr->name ) {
                results.back().witness_votes.insert( _db.get< witness_object, by_name >( vitr->witness ).owner );
@@ -914,7 +888,7 @@ namespace detail
 
    DEFINE_API_IMPL( condenser_api_impl, get_account_references )
    {
-      FC_ASSERT( false, "condenser_api::get_account_references --- Needs to be refactored for Creativecoin." );
+      FC_ASSERT( false, "condenser_api::get_account_references --- Needs to be refactored for Crea." );
    }
 
    DEFINE_API_IMPL( condenser_api_impl, lookup_account_names )
@@ -1026,17 +1000,6 @@ namespace detail
       }
 
       return result;
-   }
-
-   DEFINE_API_IMPL( condenser_api_impl, get_account_bandwidth )
-   {
-      CHECK_ARG_SIZE( 2 )
-      FC_ASSERT( _witness_api, "witness_api_plugin not enabled." );
-      return _witness_api->get_account_bandwidth(
-         {
-            args[0].as< string >(),
-            args[1].as< witness::bandwidth_type >()
-         }).bandwidth;
    }
 
    DEFINE_API_IMPL( condenser_api_impl, get_savings_withdraw_from )
@@ -1363,6 +1326,68 @@ namespace detail
       return result;
    }
 
+   DEFINE_API_IMPL( condenser_api_impl, get_download )
+   {
+      CHECK_ARG_SIZE( 4 )
+
+      account_name_type downloader = args[0].as< account_name_type >();
+      account_name_type comment_author = args[1].as< account_name_type >();
+      string comment_permlink = args[2].as< string >();
+      string signature = args[3].as< string >();
+
+      database_api::api_comment_object comment( _db.get_comment(comment_author, comment_permlink), _db);
+      database_api::api_comment_download_object download = comment.download;
+
+      FC_ASSERT(!download.resource.empty(), "This comment not has a download");
+
+      api_download_granted_object granted_download( database_api::api_download_granted_object(_db.get< download_granted_object, by_downloader>( boost::make_tuple(comment_author, comment_permlink, downloader)), _db));
+
+      crea::plugins::database_api::verify_signatures_args verify_args;
+
+      //Check signature
+      string author = comment_author;
+      digest_type::encoder enc;
+      enc.write(author.data(), (uint32_t ) author.size());
+      enc.write(comment_permlink.data(), (uint32_t) comment_permlink.size());
+      digest_type digest = enc.result();
+
+      wlog("signature: ${s}", ("s", signature));
+      string raw_signature = fc::base64_decode(signature);
+
+      FC_ASSERT(raw_signature.size() == 65, "Invalid signature size: " + std::to_string(raw_signature.size()));
+
+      wlog("hash: ${h}", ("h", digest));
+      signature_type sig;
+      for (int x = 0; x < 65; x++) {
+         sig.data[x] = (unsigned char) raw_signature[x];
+      }
+
+      verify_args.hash = digest;
+      verify_args.signatures.push_back(sig);
+      verify_args.required_active.push_back(downloader);
+
+      crea::plugins::database_api::verify_signatures_return result = _database_api->verify_signatures(verify_args);
+
+      FC_ASSERT( result.valid, "Invalid signature");
+
+      //Signature is valid, decrypt resource
+
+      fc::sha512::encoder pass_enc;
+      fc::raw::pack(pass_enc, download.password);
+      fc::sha512 pwd = pass_enc.result();
+
+      const string resource_data = fc::base64_decode(download.resource);
+      const std::vector<char> encrypted_data(resource_data.begin(), resource_data.end());
+
+      wlog("Encrypted data: ${e}", ("e", resource_data.c_str()));
+      std::vector<char> decrypted_data = fc::aes_decrypt(pwd, encrypted_data);
+
+      granted_download.resource = std::string(decrypted_data.begin(), decrypted_data.end()).erase(0, 1);
+
+      return granted_download;
+
+   }
+
    DEFINE_API_IMPL( condenser_api_impl, get_content )
    {
       CHECK_ARG_SIZE( 2 )
@@ -1443,13 +1468,13 @@ namespace detail
       return result;
    }
 
-   DEFINE_API_IMPL( condenser_api_impl, get_discussions_by_trending )
+   DEFINE_API_IMPL( condenser_api_impl, get_discussions_by_popular )
    {
       CHECK_ARG_SIZE( 1 )
       FC_ASSERT( _tags_api, "tags_api_plugin not enabled." );
 
-      auto discussions = _tags_api->get_discussions_by_trending(
-         args[0].as< tags::get_discussions_by_trending_args >() ).discussions;
+      auto discussions = _tags_api->get_discussions_by_popular(
+         args[0].as< tags::get_discussions_by_popular_args >() ).discussions;
       vector< discussion > result;
 
       for( auto& d : discussions )
@@ -1460,13 +1485,13 @@ namespace detail
       return result;
    }
 
-   DEFINE_API_IMPL( condenser_api_impl, get_discussions_by_created )
+   DEFINE_API_IMPL( condenser_api_impl, get_discussions_by_now )
    {
       CHECK_ARG_SIZE( 1 )
       FC_ASSERT( _tags_api, "tags_api_plugin not enabled." );
 
-      auto discussions = _tags_api->get_discussions_by_created(
-         args[0].as< tags::get_discussions_by_created_args >() ).discussions;
+      auto discussions = _tags_api->get_discussions_by_now(
+         args[0].as< tags::get_discussions_by_now_args >() ).discussions;
       vector< discussion > result;
 
       for( auto& d : discussions )
@@ -1545,13 +1570,13 @@ namespace detail
       return result;
    }
 
-   DEFINE_API_IMPL( condenser_api_impl, get_discussions_by_hot )
+   DEFINE_API_IMPL( condenser_api_impl, get_discussions_by_skyrockets )
    {
       CHECK_ARG_SIZE( 1 )
       FC_ASSERT( _tags_api, "tags_api_plugin not enabled." );
 
-      auto discussions = _tags_api->get_discussions_by_hot(
-         args[0].as< tags::get_discussions_by_hot_args >() ).discussions;
+      auto discussions = _tags_api->get_discussions_by_skyrockets(
+         args[0].as< tags::get_discussions_by_skyrockets_args >() ).discussions;
       vector< discussion > result;
 
       for( auto& d : discussions )
@@ -2098,10 +2123,10 @@ namespace detail
 
 } // detail
 
-uint16_t api_account_object::_compute_voting_power( const database_api::api_account_object& a )
+uint16_t api_account_object::_compute_voting_energy( const database_api::api_account_object& a )
 {
-   if( a.voting_manabar.last_update_time < CREA_HARDFORK_0_20_TIME )
-      return (uint16_t) a.voting_manabar.current_mana;
+   if( a.voting_flowbar.last_update_time < CREA_HARDFORK_0_20_TIME )
+      return (uint16_t) a.voting_flowbar.current_flow;
 
    auto vests = chain::util::get_effective_vesting_shares( a );
    if( vests <= 0 )
@@ -2109,17 +2134,17 @@ uint16_t api_account_object::_compute_voting_power( const database_api::api_acco
 
    //
    // Let t1 = last_vote_time, t2 = last_update_time
-   // vp_t2 = CREA_100_PERCENT * current_mana / vests
-   // vp_t1 = vp_t2 - CREA_100_PERCENT * (t2 - t1) / CREA_VOTING_MANA_REGENERATION_SECONDS
+   // vp_t2 = CREA_100_PERCENT * current_flow / vests
+   // vp_t1 = vp_t2 - CREA_100_PERCENT * (t2 - t1) / CREA_VOTING_FLOW_REGENERATION_SECONDS
    //
 
    uint32_t t1 = a.last_vote_time.sec_since_epoch();
-   uint32_t t2 = a.voting_manabar.last_update_time;
+   uint32_t t2 = a.voting_flowbar.last_update_time;
    uint64_t dt = (t2 > t1) ? (t2 - t1) : 0;
-   uint64_t vp_dt = CREA_100_PERCENT * dt / CREA_VOTING_MANA_REGENERATION_SECONDS;
+   uint64_t vp_dt = CREA_100_PERCENT * dt / CREA_VOTING_FLOW_REGENERATION_SECONDS;
 
    uint128_t vp_t2 = CREA_100_PERCENT;
-   vp_t2 *= a.voting_manabar.current_mana;
+   vp_t2 *= a.voting_flowbar.current_flow;
    vp_t2 /= vests;
 
    uint64_t vp_t2u = vp_t2.to_uint64();
@@ -2202,12 +2227,6 @@ void condenser_api::api_startup()
    {
       my->_market_history_api = market_history->api;
    }
-
-   auto witness = appbase::app().find_plugin< witness::witness_api_plugin >();
-   if( witness != nullptr )
-   {
-      my->_witness_api = witness->api;
-   }
 }
 
 DEFINE_LOCKLESS_APIS( condenser_api,
@@ -2221,7 +2240,7 @@ DEFINE_LOCKLESS_APIS( condenser_api,
 )
 
 DEFINE_READ_APIS( condenser_api,
-   (get_trending_tags)
+   (get_popular_tags)
    (get_state)
    (get_active_witnesses)
    (get_block_header)
@@ -2244,7 +2263,6 @@ DEFINE_READ_APIS( condenser_api,
    (get_recovery_request)
    (get_escrow)
    (get_withdraw_routes)
-   (get_account_bandwidth)
    (get_savings_withdraw_from)
    (get_savings_withdraw_to)
    (get_vesting_delegations)
@@ -2265,17 +2283,18 @@ DEFINE_READ_APIS( condenser_api,
    (get_active_votes)
    (get_account_votes)
    (get_content)
+   (get_download)
    (get_content_replies)
    (get_tags_used_by_author)
    (get_post_discussions_by_payout)
    (get_comment_discussions_by_payout)
-   (get_discussions_by_trending)
-   (get_discussions_by_created)
+   (get_discussions_by_popular)
+   (get_discussions_by_now)
    (get_discussions_by_active)
    (get_discussions_by_cashout)
    (get_discussions_by_votes)
    (get_discussions_by_children)
-   (get_discussions_by_hot)
+   (get_discussions_by_skyrockets)
    (get_discussions_by_feed)
    (get_discussions_by_blog)
    (get_discussions_by_comments)

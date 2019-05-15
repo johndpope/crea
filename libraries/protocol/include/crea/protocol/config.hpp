@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2016 Creativechain, Inc., and contributors.
+ * Copyright (c) 2016 Steemit, Inc., and contributors.
+ * Copyright (c) 2018 Creativechain FDN, and contributors.
  */
 #pragma once
 #include <crea/protocol/hardfork.hpp>
@@ -16,9 +17,10 @@
 #define CREA_CHAIN_ID (fc::sha256::hash("testnet"))
 #define CREA_ADDRESS_PREFIX                  "crea"
 
-#define CREA_GENESIS_TIME                    (fc::time_point_sec(1451606400))
-#define CREA_MINING_TIME                     (fc::time_point_sec(1451606400))
+#define CREA_GENESIS_TIME                    (fc::time_point_sec(1550592000))
+#define CREA_MINING_TIME                     (fc::time_point_sec(1550592000))
 #define CREA_CASHOUT_WINDOW_SECONDS          (60*60) /// 1 hr
+#define CREA_FIRST_WINDOW_SECONDS            (60*60)       /// 1 hour -> Reward regulation
 #define CREA_CASHOUT_WINDOW_SECONDS_PRE_HF12 (CREA_CASHOUT_WINDOW_SECONDS)
 #define CREA_CASHOUT_WINDOW_SECONDS_PRE_HF17 (CREA_CASHOUT_WINDOW_SECONDS)
 #define CREA_SECOND_CASHOUT_WINDOW           (60*60*24*3) /// 3 days
@@ -36,25 +38,32 @@
 #define CREA_OWNER_UPDATE_LIMIT                          fc::seconds(0)
 #define CREA_OWNER_AUTH_HISTORY_TRACKING_START_BLOCK_NUM 1
 
-#define CREA_INIT_SUPPLY                     (int64_t( 250 ) * int64_t( 1000000 ) * int64_t( 1000 ))
+//Supply for CREA and CBD
+#define CREA_TOTAL_INIT_SUPPLY               (int64_t( 250 ) * int64_t( 1000000 ) * int64_t( 1000 ))
+#define CREA_CBD_PERCENT_SUPPLY              (int64_t(5)) //5% of total supply is CBD
+#define CREA_TO_CBD_SUPPLY                   (int64_t(CREA_TOTAL_INIT_SUPPLY * CREA_CBD_PERCENT_SUPPLY / 100)) //Total CREA to convert as CBD
+#define CREA_INIT_PRICE                      (int64_t(23)) //CBD per 1 CREA at start
+#define CREA_INIT_SUPPLY                     (int64_t(CREA_TOTAL_INIT_SUPPLY - CREA_TO_CBD_SUPPLY))
+#define CREA_CBD_INIT_SUPPLY                 (CREA_TO_CBD_SUPPLY / CREA_INIT_PRICE)
 
 /// Allows to limit number of total produced blocks.
 #define TESTNET_BLOCK_LIMIT                   (3000000)
 
 #else // IS LIVE CREA NETWORK
 
-#define CREA_BLOCKCHAIN_VERSION              ( version(0, 20, 5) )
+#define CREA_BLOCKCHAIN_VERSION              ( version(0, 20, 6) )
 
 #define CREA_INIT_PRIVATE_KEY                (fc::ecc::private_key::regenerate(fc::sha256::hash(std::string("init_key"))))
 #define CREA_INIT_PUBLIC_KEY_STR             (std::string( crea::protocol::public_key_type(CREA_INIT_PRIVATE_KEY.get_public_key()) ))
-#define CREA_CHAIN_ID fc::sha256()
+#define CREA_CHAIN_ID                        fc::sha256()
 #define CREA_ADDRESS_PREFIX                  "CREA"
 
-#define CREA_GENESIS_TIME                    (fc::time_point_sec(1537437848))
-#define CREA_MINING_TIME                     (fc::time_point_sec(1537437848))
+#define CREA_GENESIS_TIME                    (fc::time_point_sec(1550592000))
+#define CREA_MINING_TIME                     (fc::time_point_sec(1550592000))
 #define CREA_CASHOUT_WINDOW_SECONDS_PRE_HF12 (60*60*24)    /// 1 day
 #define CREA_CASHOUT_WINDOW_SECONDS_PRE_HF17 (60*60*12)    /// 12 hours
-#define CREA_CASHOUT_WINDOW_SECONDS          (60*60*24*7)  /// 7 days
+#define CREA_FIRST_WINDOW_SECONDS            (60*60)       /// 1 hour -> Reward regulation
+#define CREA_CASHOUT_WINDOW_SECONDS          (60*60*24*10) /// 10 days -> Rewards
 #define CREA_SECOND_CASHOUT_WINDOW           (60*60*24*30) /// 30 days
 #define CREA_MAX_CASHOUT_WINDOW_SECONDS      (60*60*24*14) /// 2 weeks
 #define CREA_UPVOTE_LOCKOUT_HF7              (fc::minutes(1))
@@ -67,9 +76,15 @@
 #define CREA_OWNER_AUTH_RECOVERY_PERIOD                  fc::days(30)
 #define CREA_ACCOUNT_RECOVERY_REQUEST_EXPIRATION_PERIOD  fc::days(1)
 #define CREA_OWNER_UPDATE_LIMIT                          fc::minutes(60)
-#define CREA_OWNER_AUTH_HISTORY_TRACKING_START_BLOCK_NUM 3186477
+#define CREA_OWNER_AUTH_HISTORY_TRACKING_START_BLOCK_NUM 1
 
-#define CREA_INIT_SUPPLY                     (int64_t( 250 ) * int64_t( 1000000 ) * int64_t( 1000 ))
+//Supply for CREA and CBD
+#define CREA_TOTAL_INIT_SUPPLY               (int64_t( 19078301 ) * int64_t( 1000 ))
+#define CREA_CBD_PERCENT_SUPPLY              (int64_t(0)) //1% of total supply is CBD
+#define CREA_TO_CBD_SUPPLY                   (int64_t(CREA_TOTAL_INIT_SUPPLY * CREA_CBD_PERCENT_SUPPLY / 100)) //Total CREA to convert as CBD
+#define CREA_INIT_PRICE                      (int64_t(7)) //CBD per 1 CREA at start
+#define CREA_INIT_SUPPLY                     (int64_t(CREA_TOTAL_INIT_SUPPLY - CREA_TO_CBD_SUPPLY))
+#define CREA_CBD_INIT_SUPPLY                 (CREA_TO_CBD_SUPPLY / CREA_INIT_PRICE)
 
 #endif
 
@@ -91,30 +106,31 @@
 
 #define CREA_MAX_WITNESSES                   25
 
-#define CREA_MAX_VOTED_WITNESSES_HF0         23
-#define CREA_MAX_MINER_WITNESSES_HF0         1
+#define CREA_MAX_VOTED_WITNESSES_HF0         24
+#define CREA_MAX_MINER_WITNESSES_HF0         0
 #define CREA_MAX_RUNNER_WITNESSES_HF0        1
 
-#define CREA_MAX_VOTED_WITNESSES_HF17        23
-#define CREA_MAX_MINER_WITNESSES_HF17        1
+#define CREA_MAX_VOTED_WITNESSES_HF17        24
+#define CREA_MAX_MINER_WITNESSES_HF17        0
 #define CREA_MAX_RUNNER_WITNESSES_HF17       1
 
-#define CREA_HARDFORK_REQUIRED_WITNESSES     17 // 17 of the 21 dpos witnesses (20 elected and 1 virtual time) required for hardfork. This guarantees 75% participation on all subsequent rounds.
+#define CREA_HARDFORK_REQUIRED_WITNESSES     20 // 19 of the 25 dpos witnesses (24 elected and 1 virtual time) required for hardfork. This guarantees 75% participation on all subsequent rounds.
 #define CREA_MAX_TIME_UNTIL_EXPIRATION       (60*60) // seconds,  aka: 1 hour
 #define CREA_MAX_MEMO_SIZE                   2048
 #define CREA_MAX_PROXY_RECURSION_DEPTH       4
 #define CREA_VESTING_WITHDRAW_INTERVALS_PRE_HF_16 104
 #define CREA_VESTING_WITHDRAW_INTERVALS      8
-#define CREA_VESTING_WITHDRAW_INTERVAL_SECONDS (60*60*24*7) /// 1 week per interval
+#define CREA_VESTING_WITHDRAW_INTERVAL_SECONDS (60*60*24*7) /// 1 week interval
 #define CREA_MAX_WITHDRAW_ROUTES             10
 #define CREA_SAVINGS_WITHDRAW_TIME        	(fc::days(3))
 #define CREA_SAVINGS_WITHDRAW_REQUEST_LIMIT  100
-#define CREA_VOTING_MANA_REGENERATION_SECONDS (5*60*60*24) // 5 day
+#define CREA_VOTING_FLOW_REGENERATION_SECONDS (5*60*60*24) // 5 day
 #define CREA_MAX_VOTE_CHANGES                5
 #define CREA_REVERSE_AUCTION_WINDOW_SECONDS_HF6 (60*30) /// 30 minutes
 #define CREA_REVERSE_AUCTION_WINDOW_SECONDS_HF20 (60*15) /// 15 minutes
 #define CREA_MIN_VOTE_INTERVAL_SEC           3
 #define CREA_VOTE_DUST_THRESHOLD             (50000000)
+//#define CREA_VOTE_DUST_THRESHOLD             (3800000)
 
 #define CREA_MIN_ROOT_COMMENT_INTERVAL       (fc::seconds(60*5)) // 5 minutes
 #define CREA_MIN_REPLY_INTERVAL              (fc::seconds(20)) // 20 seconds
@@ -128,7 +144,7 @@
 #define CREA_1_PERCENT                       (CREA_100_PERCENT/100)
 #define CREA_DEFAULT_CBD_INTEREST_RATE       (10*CREA_1_PERCENT) ///< 10% APR
 
-#define CREA_INFLATION_RATE_START_PERCENT    (978) // Fixes block 7,000,000 to 9.5%
+#define CREA_INFLATION_RATE_START_PERCENT    (700) // Fixes block 7,000,000 to 7.00%
 #define CREA_INFLATION_RATE_STOP_PERCENT     (95) // 0.95%
 #define CREA_INFLATION_NARROWING_PERIOD      (300000) // Narrow 0.01% every 300k blocks
 #define CREA_CONTENT_REWARD_PERCENT          (70*CREA_1_PERCENT) //75% of inflation, 7.125% inflation
@@ -210,7 +226,7 @@
 #define CREA_PRODUCER_APR_PERCENT             750
 #define CREA_POW_APR_PERCENT                  750
 
-#define CREA_MIN_PAYOUT_CBD                  (asset(20,CBD_SYMBOL))
+#define CREA_MIN_PAYOUT_CBD                  (asset(10,CBD_SYMBOL))
 
 #define CREA_CBD_STOP_PERCENT_HF14           (5*CREA_1_PERCENT ) // Stop printing CBD at 5% Market Cap
 #define CREA_CBD_STOP_PERCENT_HF20           (10*CREA_1_PERCENT ) // Stop printing CBD at 10% Market Cap
@@ -270,7 +286,7 @@
 
 #define CREA_MAX_LIMIT_ORDER_EXPIRATION     (60*60*24*28) // 28 days
 #define CREA_DELEGATION_RETURN_PERIOD_HF0   (CREA_CASHOUT_WINDOW_SECONDS)
-#define CREA_DELEGATION_RETURN_PERIOD_HF20  (CREA_VOTING_MANA_REGENERATION_SECONDS)
+#define CREA_DELEGATION_RETURN_PERIOD_HF20  (CREA_VOTING_FLOW_REGENERATION_SECONDS)
 
 #define CREA_RD_MIN_DECAY_BITS               6
 #define CREA_RD_MAX_DECAY_BITS              32
@@ -321,7 +337,13 @@
 
 #define SMT_MAX_VOTABLE_ASSETS 2
 #define SMT_VESTING_WITHDRAW_INTERVAL_SECONDS   (60*60*24*7) /// 1 week per interval
-#define SMT_UPVOTE_LOCKOUT                      (60*60*12)  /// 12 hours
+#define SMT_UPVOTE_LOCKOUT                      (60*60*12)   /// 12 hours
+#define SMT_EMISSION_MIN_INTERVAL_SECONDS       (60*60*6)    /// 6 hours
+#define SMT_EMIT_INDEFINITELY                   (std::numeric_limits<uint32_t>::max())
+#define SMT_MAX_NOMINAL_VOTES_PER_DAY           (1000)
+#define SMT_MAX_VOTES_PER_REGENERATION          ((SMT_MAX_NOMINAL_VOTES_PER_DAY * SMT_VESTING_WITHDRAW_INTERVAL_SECONDS) / 86400)
+#define SMT_DEFAULT_VOTES_PER_REGEN_PERIOD      (50)
+#define SMT_DEFAULT_PERCENT_CURATION_REWARDS    (25 * CREA_1_PERCENT)
 
 #endif /// CREA_ENABLE_SMT
 

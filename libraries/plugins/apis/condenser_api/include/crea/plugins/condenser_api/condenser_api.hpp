@@ -9,7 +9,6 @@
 #include <crea/plugins/follow_api/follow_api.hpp>
 #include <crea/plugins/reputation_api/reputation_api.hpp>
 #include <crea/plugins/market_history_api/market_history_api.hpp>
-#include <crea/plugins/witness_api/witness_api.hpp>
 
 #include <crea/plugins/condenser_api/condenser_api_legacy_objects.hpp>
 
@@ -31,11 +30,11 @@ namespace detail{ class condenser_api_impl; }
 struct discussion_index
 {
    string           category;         /// category by which everything is filtered
-   vector< string > trending;         /// trending posts over the last 24 hours
+   vector< string > popular;         /// popular posts over the last 24 hours
    vector< string > payout;           /// pending posts by payout
    vector< string > payout_comments;  /// pending comments by payout
-   vector< string > trending30;       /// pending lifetime payout
-   vector< string > created;          /// creation date
+   vector< string > popular30;       /// pending lifetime payout
+   vector< string > now;          /// creation date
    vector< string > responses;        /// creation date
    vector< string > updated;          /// creation date
    vector< string > active;           /// last update or reply
@@ -43,7 +42,7 @@ struct discussion_index
    vector< string > cashout;          /// last update or reply
    vector< string > maturing;         /// about to be paid out
    vector< string > best;             /// total lifetime payout
-   vector< string > hot;              /// total lifetime payout
+   vector< string > skyrockets;       /// total lifetime payout
    vector< string > promoted;         /// pending lifetime payout
 };
 
@@ -116,7 +115,7 @@ struct api_account_object
       lifetime_vote_count( a.lifetime_vote_count ),
       post_count( a.post_count ),
       can_vote( a.can_vote ),
-      voting_manabar( a.voting_manabar ),
+      voting_flowbar( a.voting_flowbar ),
       balance( legacy_asset::from_asset( a.balance ) ),
       savings_balance( legacy_asset::from_asset( a.savings_balance ) ),
       cbd_balance( legacy_asset::from_asset( a.cbd_balance ) ),
@@ -147,15 +146,17 @@ struct api_account_object
       last_root_post( a.last_root_post ),
       last_vote_time( a.last_vote_time ),
       post_bandwidth( a.post_bandwidth ),
+      follower_count(a.follower_count),
+      following_count(a.following_count),
       pending_claimed_accounts( a.pending_claimed_accounts )
    {
-      voting_power = _compute_voting_power(a);
+      voting_energy = _compute_voting_energy(a);
       proxied_vsf_votes.insert( proxied_vsf_votes.end(), a.proxied_vsf_votes.begin(), a.proxied_vsf_votes.end() );
    }
 
    api_account_object(){}
 
-   uint16_t _compute_voting_power( const database_api::api_account_object& a );
+   uint16_t _compute_voting_energy( const database_api::api_account_object& a );
 
    account_id_type   id;
 
@@ -180,8 +181,8 @@ struct api_account_object
    uint32_t          post_count = 0;
 
    bool              can_vote = false;
-   util::manabar     voting_manabar;
-   uint16_t          voting_power = 0;
+   util::flowbar     voting_flowbar;
+   uint16_t          voting_energy = 0;
 
    legacy_asset      balance;
    legacy_asset      savings_balance;
@@ -216,6 +217,7 @@ struct api_account_object
    uint16_t          withdraw_routes = 0;
 
    vector< share_type > proxied_vsf_votes;
+   vector< string >  downloads;
 
    uint16_t          witnesses_voted_for = 0;
 
@@ -223,6 +225,8 @@ struct api_account_object
    time_point_sec    last_root_post;
    time_point_sec    last_vote_time;
    uint32_t          post_bandwidth = 0;
+   uint32_t          follower_count = 0;
+   uint32_t          following_count = 0;
 
    share_type        pending_claimed_accounts = 0;
 };
@@ -232,13 +236,6 @@ struct extended_account : public api_account_object
    extended_account(){}
    extended_account( const database_api::api_account_object& a ) :
       api_account_object( a ) {}
-
-   share_type                                               average_bandwidth;
-   share_type                                               lifetime_bandwidth;
-   time_point_sec                                           last_bandwidth_update;
-   share_type                                               average_market_bandwidth;
-   share_type                                               lifetime_market_bandwidth;
-   time_point_sec                                           last_market_bandwidth_update;
 
    legacy_asset                                             vesting_balance;  /// convert vesting_shares to vesting crea
    share_type                                               reputation = 0;
@@ -257,6 +254,54 @@ struct extended_account : public api_account_object
    optional< vector< string > >                             feed;             /// feed posts for this user
    optional< vector< string > >                             recent_replies;   /// blog posts for this user
    optional< vector< string > >                             recommended;      /// posts recommened for this user
+};
+
+struct api_download_granted_object
+{
+   api_download_granted_object( const database_api::api_download_granted_object& o ):
+       id( o.id ), payment_date( o.payment_date ), comment_author( o.comment_author ),
+       comment_permlink( o.comment_permlink ), price( legacy_asset::from_asset( o.price ) )
+   {
+
+   }
+   api_download_granted_object(){}
+
+   download_granted_id_type  id;
+
+   time_point_sec            payment_date;
+   account_name_type         comment_author;
+   string                    comment_permlink;
+   string                    resource = "";
+   legacy_asset              price;
+
+};
+
+struct api_comment_download_object
+{
+   api_comment_download_object( const database_api::api_comment_download_object& o ):
+       id( o.id ), resource( o.resource ), name( o.name ),
+       type( o.type ), size( o.size ), times_downloaded( o.times_downloaded), password( o.password ),
+       price( o.price ), downloaders( o.downloaders )
+   {
+      author = o.author;
+      permlink = o.permlink;
+   }
+   api_comment_download_object(){}
+
+   comment_download_id_type  id;
+
+   account_name_type         author;
+   string                    permlink;
+   string                    resource;
+   string                    name;
+   string                    type;
+   uint32_t                  size = 0;
+   uint32_t                  times_downloaded = 0;
+   string                    password;
+   asset                     price;
+   vector< string >          downloaders;
+
+
 };
 
 struct api_comment_object
@@ -295,7 +340,8 @@ struct api_comment_object
       percent_crea_dollars( c.percent_crea_dollars ),
       allow_replies( c.allow_replies ),
       allow_votes( c.allow_votes ),
-      allow_curation_rewards( c.allow_curation_rewards )
+      allow_curation_rewards( c.allow_curation_rewards ),
+      download( c.download )
    {
       for( auto& route : c.beneficiaries )
       {
@@ -314,6 +360,7 @@ struct api_comment_object
 
    string            title;
    string            body;
+   api_comment_download_object download;
    string            json_metadata;
    time_point_sec    last_update;
    time_point_sec    created;
@@ -425,10 +472,6 @@ struct extended_dynamic_global_properties
 
    uint16_t          cbd_stop_percent = 0;
    uint16_t          cbd_start_percent = 0;
-
-   int32_t           average_block_size = 0;
-   int64_t           current_reserve_ratio = 1;
-   uint128_t         max_virtual_bandwidth = 0;
 };
 
 struct api_witness_object
@@ -721,7 +764,7 @@ struct discussion : public api_comment_object
 
 struct tag_index
 {
-   vector< tags::tag_name_type > trending; /// pending payouts
+   vector< tags::tag_name_type > popular; /// pending payouts
 };
 
 struct api_tag_object
@@ -732,7 +775,7 @@ struct api_tag_object
       net_votes( o.net_votes ),
       top_posts( o.top_posts ),
       comments( o.comments ),
-      trending( o.trending ) {}
+      popular( o.popular ) {}
 
    api_tag_object() {}
 
@@ -741,7 +784,7 @@ struct api_tag_object
    int32_t              net_votes = 0;
    uint32_t             top_posts = 0;
    uint32_t             comments = 0;
-   fc::uint128          trending = 0;
+   fc::uint128          popular = 0;
 };
 
 struct state
@@ -944,7 +987,7 @@ typedef arg_type api_name ## _args;                         \
 typedef return_type api_name ## _return;
 
 /*               API,                                    args,                return */
-DEFINE_API_ARGS( get_trending_tags,                      vector< variant >,   vector< api_tag_object > )
+DEFINE_API_ARGS( get_popular_tags,                      vector< variant >,   vector< api_tag_object > )
 DEFINE_API_ARGS( get_state,                              vector< variant >,   state )
 DEFINE_API_ARGS( get_active_witnesses,                   vector< variant >,   vector< account_name_type > )
 DEFINE_API_ARGS( get_block_header,                       vector< variant >,   optional< block_header > )
@@ -969,7 +1012,6 @@ DEFINE_API_ARGS( get_owner_history,                      vector< variant >,   ve
 DEFINE_API_ARGS( get_recovery_request,                   vector< variant >,   optional< database_api::api_account_recovery_request_object > )
 DEFINE_API_ARGS( get_escrow,                             vector< variant >,   optional< api_escrow_object > )
 DEFINE_API_ARGS( get_withdraw_routes,                    vector< variant >,   vector< database_api::api_withdraw_vesting_route_object > )
-DEFINE_API_ARGS( get_account_bandwidth,                  vector< variant >,   optional< witness::api_account_bandwidth_object > )
 DEFINE_API_ARGS( get_savings_withdraw_from,              vector< variant >,   vector< api_savings_withdraw_object > )
 DEFINE_API_ARGS( get_savings_withdraw_to,                vector< variant >,   vector< api_savings_withdraw_object > )
 DEFINE_API_ARGS( get_vesting_delegations,                vector< variant >,   vector< api_vesting_delegation_object > )
@@ -989,18 +1031,19 @@ DEFINE_API_ARGS( verify_authority,                       vector< variant >,   bo
 DEFINE_API_ARGS( verify_account_authority,               vector< variant >,   bool )
 DEFINE_API_ARGS( get_active_votes,                       vector< variant >,   vector< tags::vote_state > )
 DEFINE_API_ARGS( get_account_votes,                      vector< variant >,   vector< account_vote > )
+DEFINE_API_ARGS( get_download,                           vector< variant >,   api_download_granted_object )
 DEFINE_API_ARGS( get_content,                            vector< variant >,   discussion )
 DEFINE_API_ARGS( get_content_replies,                    vector< variant >,   vector< discussion > )
 DEFINE_API_ARGS( get_tags_used_by_author,                vector< variant >,   vector< tags::tag_count_object > )
 DEFINE_API_ARGS( get_post_discussions_by_payout,         vector< variant >,   vector< discussion > )
 DEFINE_API_ARGS( get_comment_discussions_by_payout,      vector< variant >,   vector< discussion > )
-DEFINE_API_ARGS( get_discussions_by_trending,            vector< variant >,   vector< discussion > )
-DEFINE_API_ARGS( get_discussions_by_created,             vector< variant >,   vector< discussion > )
+DEFINE_API_ARGS( get_discussions_by_popular,            vector< variant >,   vector< discussion > )
+DEFINE_API_ARGS( get_discussions_by_now,             vector< variant >,   vector< discussion > )
 DEFINE_API_ARGS( get_discussions_by_active,              vector< variant >,   vector< discussion > )
 DEFINE_API_ARGS( get_discussions_by_cashout,             vector< variant >,   vector< discussion > )
 DEFINE_API_ARGS( get_discussions_by_votes,               vector< variant >,   vector< discussion > )
 DEFINE_API_ARGS( get_discussions_by_children,            vector< variant >,   vector< discussion > )
-DEFINE_API_ARGS( get_discussions_by_hot,                 vector< variant >,   vector< discussion > )
+DEFINE_API_ARGS( get_discussions_by_skyrockets,                 vector< variant >,   vector< discussion > )
 DEFINE_API_ARGS( get_discussions_by_feed,                vector< variant >,   vector< discussion > )
 DEFINE_API_ARGS( get_discussions_by_blog,                vector< variant >,   vector< discussion > )
 DEFINE_API_ARGS( get_discussions_by_comments,            vector< variant >,   vector< discussion > )
@@ -1038,7 +1081,7 @@ public:
 
    DECLARE_API(
       (get_version)
-      (get_trending_tags)
+      (get_popular_tags)
       (get_state)
       (get_active_witnesses)
       (get_block_header)
@@ -1063,7 +1106,6 @@ public:
       (get_recovery_request)
       (get_escrow)
       (get_withdraw_routes)
-      (get_account_bandwidth)
       (get_savings_withdraw_from)
       (get_savings_withdraw_to)
       (get_vesting_delegations)
@@ -1083,18 +1125,19 @@ public:
       (verify_account_authority)
       (get_active_votes)
       (get_account_votes)
+      (get_download)
       (get_content)
       (get_content_replies)
       (get_tags_used_by_author)
       (get_post_discussions_by_payout)
       (get_comment_discussions_by_payout)
-      (get_discussions_by_trending)
-      (get_discussions_by_created)
+      (get_discussions_by_popular)
+      (get_discussions_by_now)
       (get_discussions_by_active)
       (get_discussions_by_cashout)
       (get_discussions_by_votes)
       (get_discussions_by_children)
-      (get_discussions_by_hot)
+      (get_discussions_by_skyrockets)
       (get_discussions_by_feed)
       (get_discussions_by_blog)
       (get_discussions_by_comments)
@@ -1134,10 +1177,10 @@ public:
 } } } // crea::plugins::condenser_api
 
 FC_REFLECT( crea::plugins::condenser_api::discussion_index,
-            (category)(trending)(payout)(payout_comments)(trending30)(updated)(created)(responses)(active)(votes)(maturing)(best)(hot)(promoted)(cashout) )
+            (category)(popular)(payout)(payout_comments)(popular30)(updated)(now)(responses)(active)(votes)(maturing)(best)(skyrockets)(promoted)(cashout) )
 
 FC_REFLECT( crea::plugins::condenser_api::api_tag_object,
-            (name)(total_payouts)(net_votes)(top_posts)(comments)(trending) )
+            (name)(total_payouts)(net_votes)(top_posts)(comments)(popular) )
 
 FC_REFLECT( crea::plugins::condenser_api::state,
             (current_route)(props)(tag_idx)(tags)(content)(accounts)(witnesses)(discussion_idx)(witness_schedule)(feed_price)(error) )
@@ -1152,7 +1195,7 @@ FC_REFLECT( crea::plugins::condenser_api::api_account_object,
              (id)(name)(owner)(active)(posting)(memo_key)(json_metadata)(proxy)(last_owner_update)(last_account_update)
              (created)(mined)
              (recovery_account)(last_account_recovery)(reset_account)
-             (comment_count)(lifetime_vote_count)(post_count)(can_vote)(voting_manabar)(voting_power)
+             (comment_count)(lifetime_vote_count)(post_count)(can_vote)(voting_flowbar)(voting_energy)
              (balance)
              (savings_balance)
              (cbd_balance)(cbd_seconds)(cbd_seconds_last_update)(cbd_last_interest_payment)
@@ -1163,17 +1206,25 @@ FC_REFLECT( crea::plugins::condenser_api::api_account_object,
              (posting_rewards)
              (proxied_vsf_votes)(witnesses_voted_for)
              (last_post)(last_root_post)(last_vote_time)
-             (post_bandwidth)(pending_claimed_accounts)
+             (post_bandwidth)(follower_count)(following_count)(pending_claimed_accounts)
           )
 
 FC_REFLECT_DERIVED( crea::plugins::condenser_api::extended_account, (crea::plugins::condenser_api::api_account_object),
-            (average_bandwidth)(lifetime_bandwidth)(last_bandwidth_update)(average_market_bandwidth)(lifetime_market_bandwidth)(last_market_bandwidth_update)
             (vesting_balance)(reputation)(transfer_history)(market_history)(post_history)(vote_history)(other_history)(witness_votes)(tags_usage)(guest_bloggers)(open_orders)(comments)(feed)(blog)(recent_replies)(recommended) )
+
+FC_REFLECT( crea::plugins::condenser_api::api_comment_download_object,
+            (id)(author)(permlink)
+            (resource)(name)(type)(size)(times_downloaded)(price)(downloaders)
+)
+
+FC_REFLECT( crea::plugins::condenser_api::api_download_granted_object,
+            (id)(payment_date)(comment_author)(comment_permlink)(resource)(price)
+)
 
 FC_REFLECT( crea::plugins::condenser_api::api_comment_object,
              (id)(author)(permlink)
              (category)(parent_author)(parent_permlink)
-             (title)(body)(json_metadata)(last_update)(created)(active)(last_payout)
+             (title)(body)(download)(json_metadata)(last_update)(created)(active)(last_payout)
              (depth)(children)
              (net_rshares)(abs_rshares)(vote_rshares)
              (children_abs_rshares)(cashout_time)(max_cashout_time)
@@ -1191,8 +1242,7 @@ FC_REFLECT( crea::plugins::condenser_api::extended_dynamic_global_properties,
             (total_reward_fund_crea)(total_reward_shares2)(pending_rewarded_vesting_shares)(pending_rewarded_vesting_crea)
             (cbd_interest_rate)(cbd_print_rate)
             (maximum_block_size)(current_aslot)(recent_slots_filled)(participation_count)(last_irreversible_block_num)(vote_power_reserve_rate)
-            (delegation_return_period)(reverse_auction_seconds)(cbd_stop_percent)(cbd_start_percent)
-            (average_block_size)(current_reserve_ratio)(max_virtual_bandwidth) )
+            (delegation_return_period)(reverse_auction_seconds)(cbd_stop_percent)(cbd_start_percent) )
 
 FC_REFLECT( crea::plugins::condenser_api::api_witness_object,
              (id)
@@ -1285,7 +1335,7 @@ FC_REFLECT( crea::plugins::condenser_api::scheduled_hardfork,
 FC_REFLECT( crea::plugins::condenser_api::account_vote,
             (authorperm)(weight)(rshares)(percent)(time) )
 
-FC_REFLECT( crea::plugins::condenser_api::tag_index, (trending) )
+FC_REFLECT( crea::plugins::condenser_api::tag_index, (popular) )
 
 FC_REFLECT_ENUM( crea::plugins::condenser_api::withdraw_route_type, (incoming)(outgoing)(all) )
 
